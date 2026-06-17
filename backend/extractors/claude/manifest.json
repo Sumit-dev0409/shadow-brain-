@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Claude Extractor",
+  "version": "1.0",
+  "description": "Extract Claude conversations and save only new messages.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "downloads",
+    "scripting",
+    "tabs",
+    "notifications"
+  ],
+  "host_permissions": ["https://claude.ai/*", "https://www.claude.ai/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://claude.ai/*", "https://*.claude.ai/*"],
+      "js": ["fetch.js"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

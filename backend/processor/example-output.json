@@ -1,0 +1,146 @@
+{
+  "exported_at": "2026-06-16T03:38:01.891Z",
+  "meta": {
+    "last_updated": "2026-06-16T03:37:09.029Z",
+    "platforms": {
+      "chatgpt": 2
+    },
+    "total_conversations": 2,
+    "total_messages": 15
+  },
+  "enrichment_metadata": {
+    "enriched_at": "2026-06-16T10:42:33.521Z",
+    "enrichment_version": "1.0.0",
+    "total_conversations": 2
+  },
+  "conversations": [
+    {
+      "captured_at": "2026-06-16T03:37:08.994Z",
+      "external_id": "example-conversation-001",
+      "message_count": 4,
+      "messages": [
+        {
+          "content": "I'm trying to understand Docker containers. How do I create a simple Node.js application and containerize it?",
+          "index": 0,
+          "role": "user",
+          "timestamp": "2026-06-16T03:37:01.993Z"
+        },
+        {
+          "content": "To containerize a Node.js application, you'll need to: 1) Create a Dockerfile that specifies the base image (node:18), copy your application files, install dependencies with npm install, and expose the port your app runs on. 2) Build the Docker image using docker build -t my-app . 3) Run a container from that image using docker run -p 3000:3000 my-app. The Dockerfile acts as a blueprint for creating containers. Here's a basic example:\n\nFROM node:18\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nEXPOSE 3000\nCMD [\"node\", \"server.js\"]",
+          "index": 1,
+          "role": "assistant",
+          "timestamp": "2026-06-16T03:37:02.993Z"
+        },
+        {
+          "content": "That's helpful! What about Docker Compose? Can I use it to run multiple containers together?",
+          "index": 2,
+          "role": "user",
+          "timestamp": "2026-06-16T03:37:03.993Z"
+        },
+        {
+          "content": "Yes! Docker Compose is perfect for orchestrating multiple containers. You define all your services (Node.js app, database, Redis, etc.) in a single docker-compose.yml file. It uses YAML syntax and lets you specify environment variables, volumes, ports, and dependencies. When you run docker-compose up, it creates and starts all containers together. This is great for development because you get the entire application stack running locally. For production, you'd typically use Kubernetes, but Docker Compose is excellent for testing.",
+          "index": 3,
+          "role": "assistant",
+          "timestamp": "2026-06-16T03:37:04.993Z"
+        }
+      ],
+      "platform": "chatgpt",
+      "saved_at": "2026-06-16T03:37:09.008Z",
+      "source": "realtime",
+      "title": "Docker and Node.js Containerization Guide",
+      "url": "https://chatgpt.com/c/example-001",
+      "metadata": {
+        "enriched_at": "2026-06-16T10:42:33.500Z",
+        "enrichment_version": "1.0.0",
+        "topic": "Node.js Application Containerization with Docker",
+        "category": "Technical",
+        "summary": "Comprehensive guide on containerizing Node.js applications using Docker. Covers Dockerfile creation with base images, dependency management, port exposure, and Docker build/run commands. Explains Docker Compose for multi-container orchestration using YAML configuration, environment variables, volumes, and service dependencies. Discusses use cases for development environments and contrasts with Kubernetes for production deployments.",
+        "keywords": [
+          "Docker",
+          "containerization",
+          "Node.js",
+          "Dockerfile",
+          "Docker Compose",
+          "container orchestration",
+          "YAML",
+          "npm",
+          "application deployment"
+        ],
+        "entities": [
+          "Docker",
+          "Node.js",
+          "Docker Compose",
+          "Kubernetes",
+          "npm",
+          "Dockerfile",
+          "YAML"
+        ],
+        "importance_score": 4
+      }
+    },
+    {
+      "captured_at": "2026-06-16T03:37:15.994Z",
+      "external_id": "example-conversation-002",
+      "message_count": 4,
+      "messages": [
+        {
+          "content": "I'm building a web API with Express.js and I need to add authentication. What's the best approach?",
+          "index": 0,
+          "role": "user",
+          "timestamp": "2026-06-16T03:37:10.993Z"
+        },
+        {
+          "content": "For Express.js APIs, JWT (JSON Web Tokens) is a popular choice. The typical flow is: 1) User logs in with credentials 2) Server validates and generates a JWT token 3) Client stores the token and sends it in the Authorization header for subsequent requests 4) Server verifies the token on protected routes. You can use the 'jsonwebtoken' npm package to sign and verify tokens. Consider also adding bcrypt to hash passwords before storing. For production, ensure HTTPS is enabled and consider using OAuth2 for third-party authentication.",
+          "index": 1,
+          "role": "assistant",
+          "timestamp": "2026-06-16T03:37:11.993Z"
+        },
+        {
+          "content": "Should I use cookies instead of JWT tokens?",
+          "index": 2,
+          "role": "user",
+          "timestamp": "2026-06-16T03:37:12.993Z"
+        },
+        {
+          "content": "Both have tradeoffs. Cookies are stateful (server tracks sessions) and good for traditional web apps, especially since they're automatically sent by browsers. JWT tokens are stateless, great for mobile apps and distributed systems since they don't require server storage. JWTs are better for APIs and microservices, while cookies work better for server-rendered web applications. Many modern apps use both - JWTs for API access and secure HTTP-only cookies for managing the token itself.",
+          "index": 3,
+          "role": "assistant",
+          "timestamp": "2026-06-16T03:37:13.993Z"
+        }
+      ],
+      "platform": "chatgpt",
+      "saved_at": "2026-06-16T03:37:15.009Z",
+      "source": "realtime",
+      "title": "Express.js API Authentication Best Practices",
+      "url": "https://chatgpt.com/c/example-002",
+      "metadata": {
+        "enriched_at": "2026-06-16T10:42:33.510Z",
+        "enrichment_version": "1.0.0",
+        "topic": "JWT and Cookie Authentication in Express APIs",
+        "category": "Technical",
+        "summary": "In-depth discussion of authentication strategies for Express.js APIs. Explains JWT workflow including credential validation, token generation, client-side storage, and server-side verification with Authorization headers. Covers password security using bcrypt and HTTPS requirements. Compares stateful cookie-based authentication with stateless JWT tokens, highlighting JWT advantages for distributed systems and APIs while noting cookie benefits for traditional web applications.",
+        "keywords": [
+          "Express.js",
+          "JWT",
+          "authentication",
+          "API security",
+          "cookies",
+          "OAuth2",
+          "bcrypt",
+          "password hashing",
+          "stateless authentication"
+        ],
+        "entities": [
+          "Express.js",
+          "JWT",
+          "jsonwebtoken",
+          "bcrypt",
+          "OAuth2",
+          "HTTPS",
+          "HTTP-only cookies"
+        ],
+        "importance_score": 4
+      }
+    }
+  ]
+}

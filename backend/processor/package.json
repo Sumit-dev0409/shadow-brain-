@@ -1,0 +1,29 @@
+{
+  "name": "brain-shadow-enricher",
+  "version": "1.0.0",
+  "description": "OpenRouter metadata enrichment for Brain Shadow conversations",
+  "main": "enrich.js",
+  "scripts": {
+    "enrich": "node enrich.js",
+    "enrich:verbose": "NODE_DEBUG=* node enrich.js",
+    "validate": "node -c enrich.js && node -c config.js && node -c openrouter-client.js && node -c validators.js"
+  },
+  "keywords": [
+    "openrouter",
+    "metadata",
+    "enrichment",
+    "brain-shadow"
+  ],
+  "author": "Brain Shadow Team",
+  "license": "MIT",
+  "dependencies": {
+    "openai": "^4.52.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
