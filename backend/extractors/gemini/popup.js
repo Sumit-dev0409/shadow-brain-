@@ -63,22 +63,23 @@ async function extractAllConversations() {
     return;
   }
 
-  // Navigate to main Gemini page to access sidebar if not there
-  if (!tab.url.includes('gemini.google.com/app')) {
-    setStatus('Navigating to Gemini…', '#aaa');
-    await chrome.tabs.update(tab.id, { url: 'https://gemini.google.com/app' });
+  // Always navigate to the base app page so the full sidebar is loaded.
+  // (On a specific conversation page the sidebar may not have scrolled to
+  //  load older chats, so we always start fresh from /app.)
+  setStatus('Opening Gemini sidebar…', '#aaa');
+  await chrome.tabs.update(tab.id, { url: 'https://gemini.google.com/app' });
 
-    await new Promise((resolve) => {
-      const onUpdate = (id, info) => {
-        if (id === tab.id && info.status === 'complete') {
-          chrome.tabs.onUpdated.removeListener(onUpdate);
-          setTimeout(resolve, 1200);
-        }
-      };
-      chrome.tabs.onUpdated.addListener(onUpdate);
-      setTimeout(resolve, 7000);
-    });
-  }
+  await new Promise((resolve) => {
+    const onUpdate = (id, info) => {
+      if (id === tab.id && info.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdate);
+        // Extra 1.5 s for Angular to render the sidebar
+        setTimeout(resolve, 1500);
+      }
+    };
+    chrome.tabs.onUpdated.addListener(onUpdate);
+    setTimeout(resolve, 8000); // hard fallback
+  });
 
   setStatus('Reading conversation list…', '#aaa');
 
