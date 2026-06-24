@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from "react";
 import { AnimatePresence } from "framer-motion";
-import { Message } from "@/app/types";
+import { Message, ChatSession } from "@/app/types";
 import { MessageBubble } from "./MessageBubble";
 import { TypingIndicator } from "./TypingIndicator";
 import { WelcomeScreen } from "./WelcomeScreen";
@@ -10,12 +10,13 @@ import { ChatInput } from "./ChatInput";
 import { TopBar } from "./TopBar";
 
 interface ChatAreaProps {
-  messages: Message[];
-  isTyping: boolean;
-  onSend: (text: string) => void;
-  onSuggest: (text: string) => void;
-  onClear: () => void;
+  messages:    Message[];
+  isTyping:    boolean;
+  onSend:      (text: string) => void;
+  onSuggest:   (text: string) => void;
+  onClear:     () => void;
   onMenuClick: () => void;
+  session?:    ChatSession;
 }
 
 export function ChatArea({
@@ -25,6 +26,7 @@ export function ChatArea({
   onSuggest,
   onClear,
   onMenuClick,
+  session,
 }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -34,7 +36,7 @@ export function ChatArea({
 
   return (
     <div className="flex flex-col h-screen flex-1 min-w-0" style={{ background: "var(--bg-deep)" }}>
-      <TopBar onMenuClick={onMenuClick} onClear={onClear} />
+      <TopBar onMenuClick={onMenuClick} onClear={onClear} session={session} />
 
       <div className="flex-1 overflow-y-auto">
         {messages.length === 0 && !isTyping ? (

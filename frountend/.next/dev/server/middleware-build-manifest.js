@@ -1,0 +1,50 @@
+globalThis.__BUILD_MANIFEST = {
+  "pages": {
+    "/_app": [
+      "static/chunks/0_aq_next_dist_compiled_0xgb4m3._.js",
+      "static/chunks/0_aq_next_dist_shared_lib_1f2aq-3._.js",
+      "static/chunks/0_aq_next_dist_client_023vjh9._.js",
+      "static/chunks/0_aq_next_dist_1yccozr._.js",
+      "static/chunks/0_aq_next_app_0xquoef.js",
+      "static/chunks/[next]_entry_page-loader_ts_0i3ti61._.js",
+      "static/chunks/0_aq_react-dom_0n_lsm7._.js",
+      "static/chunks/0_aq_0s6gg3e._.js",
+      "static/chunks/[root-of-the-server]__1w7v6-b._.js",
+      "static/chunks/frountend_pages__app_0du2_q-._.js",
+      "static/chunks/turbopack-frountend_pages__app_1pcd-4g._.js"
+    ],
+    "/_error": [
+      "static/chunks/0_aq_next_dist_compiled_0xgb4m3._.js",
+      "static/chunks/0_aq_next_dist_shared_lib_1s647zo._.js",
+      "static/chunks/0_aq_next_dist_client_023vjh9._.js",
+      "static/chunks/0_aq_next_dist_10msdar._.js",
+      "static/chunks/[next]_entry_page-loader_ts_0xf_a14._.js",
+      "static/chunks/0_aq_react-dom_0n_lsm7._.js",
+      "static/chunks/0_aq_0s6gg3e._.js",
+      "static/chunks/[root-of-the-server]__14ss_ds._.js",
+      "static/chunks/frountend_pages__error_0du2_q-._.js",
+      "static/chunks/turbopack-frountend_pages__error_1oq920k._.js"
+    ]
+  },
+  "devFiles": [],
+  "polyfillFiles": [
+    "static/chunks/0_aq_next_dist_build_polyfills_polyfill-nomodule.js"
+  ],
+  "lowPriorityFiles": [
+    "static/development/_buildManifest.js",
+    "static/development/_ssgManifest.js",
+    "static/development/_clientMiddlewareManifest.js"
+  ],
+  "rootMainFiles": [
+    "static/chunks/[turbopack]_browser_dev_hmr-client_hmr-client_ts_10rcijb._.js",
+    "static/chunks/0_aq_next_dist_compiled_next-devtools_index_0u9w4t5.js",
+    "static/chunks/0_aq_next_dist_compiled_react-dom_0_gys1o._.js",
+    "static/chunks/0_aq_next_dist_compiled_react-server-dom-turbopack_1d13skf._.js",
+    "static/chunks/0_aq_next_dist_compiled_1n0rkq9._.js",
+    "static/chunks/0_aq_next_dist_client_11fi_q6._.js",
+    "static/chunks/0_aq_next_dist_0y6b-r3._.js",
+    "static/chunks/0_aq_@swc_helpers_cjs_14qe-ya._.js",
+    "static/chunks/frountend_1anvha4._.js",
+    "static/chunks/turbopack-frountend_1k1zx1g._.js"
+  ]
+};

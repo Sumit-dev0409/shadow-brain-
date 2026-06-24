@@ -1,171 +1,191 @@
-const statusEl        = document.getElementById('status');
-const detailsEl       = document.getElementById('details');
-const progressBar     = document.getElementById('progressBar');
-const extractAllBtn   = document.getElementById('extractAllBtn');
-const downloadJsonBtn = document.getElementById('downloadJsonBtn');
-const clearCacheBtn   = document.getElementById('clearCacheBtn');
-const backendUrlEl    = document.getElementById('backendUrl');
-const btnSaveUrl      = document.getElementById('btnSaveUrl');
+// Brain Shadow — Gemini Popup Script
 
-function setStatus(text, color = '#aaa') {
-  statusEl.textContent = text;
-  statusEl.style.color = color;
-}
-function setDetails(text) { detailsEl.textContent = text; }
-function setProgress(v) {
-  progressBar.style.display = v > 0 ? 'block' : 'none';
-  progressBar.value = v;
+const PLATFORM_URL = 'gemini.google.com';
+const BASE_URL     = 'https://gemini.google.com/app';  // sidebar lives here
+const EXTRA_WAIT   = 1800;                              // ms after page load
+const EXPORT_NAME  = 'brain_shadow_gemini';
+let isBulkRunning  = false;
+
+function showToast(msg, type = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${type} show`;
+  setTimeout(() => { t.className = 'toast'; }, 2500);
 }
 
-// ── Progress from background ───────────────────────────────
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.action === 'scrapeProgress') {
-    setStatus(`Scanning ${msg.current} of ${msg.total} chats…`, '#aaa');
-    setDetails(`${msg.title} — ${msg.messages || 0} messages`);
-    setProgress(msg.percentage || 0);
-  }
-  if (msg.action === 'downloadStatus') {
-    setStatus(msg.message || '', '#aaa');
-  }
-});
-
-// ── Retry helper (content script loads after page "complete") ─
-function sendWithRetry(tabId, message, maxAttempts = 8, delayMs = 1200) {
-  return new Promise(async (resolve, reject) => {
-    for (let i = 1; i <= maxAttempts; i++) {
-      const result = await new Promise((res) => {
-        chrome.tabs.sendMessage(tabId, message, (r) => {
-          res(chrome.runtime.lastError
-            ? { ok: false, error: chrome.runtime.lastError.message }
-            : { ok: true, data: r });
-        });
-      });
-      if (result.ok) { resolve(result.data); return; }
-      if (i === maxAttempts) { reject(new Error(result.error)); return; }
-      setStatus(`Waiting for page… (${i}/${maxAttempts})`, '#888');
-      await new Promise(r => setTimeout(r, delayMs));
-    }
+async function loadStats() {
+  const meta = await chrome.runtime.sendMessage({ type: 'GET_META' });
+  document.getElementById('totalConvs').textContent     = meta.total_conversations || 0;
+  document.getElementById('totalMsgs').textContent      = meta.total_messages      || 0;
+  document.getElementById('totalPlatforms').textContent = Object.keys(meta.platforms || {}).length;
+  const platforms = meta.platforms || {};
+  ['gemini','chatgpt','claude','deepseek','blackbox','copilot'].forEach(p => {
+    const badge = document.getElementById(`badge-${p}`);
+    if (!badge) return;
+    if (platforms[p]) { badge.classList.add('active'); badge.innerHTML = `<span class="dot"></span>${p.charAt(0).toUpperCase() + p.slice(1)} (${platforms[p]})`; }
+    else badge.classList.remove('active');
   });
 }
 
-// ── Scan all conversations ─────────────────────────────────
-async function extractAllConversations() {
-  extractAllBtn.disabled = true;
-  extractAllBtn.textContent = '⏳ Scanning…';
-  setDetails('');
-  setProgress(0);
+async function loadRecentConversations() {
+  const conversations = await chrome.runtime.sendMessage({ type: 'GET_ALL_CONVERSATIONS' });
+  const list = document.getElementById('convList');
+  if (!conversations || conversations.length === 0) { list.innerHTML = '<div class="empty-state">No conversations captured yet</div>'; return; }
+  list.innerHTML = conversations.slice(0, 8).map(conv => `
+    <div class="conv-item">
+      <span class="conv-platform">${conv.platform.substring(0, 3).toUpperCase()}</span>
+      <span class="conv-title" title="${conv.title || ''}">${conv.title || 'Untitled'}</span>
+      <span class="conv-msgs">${conv.message_count || conv.messages?.length || 0}msg</span>
+    </div>
+  `).join('');
+}
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+function showProgress(count, total, currentTitle = '') {
+  document.getElementById('progressSection').classList.add('visible');
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+  document.getElementById('progressFill').style.width  = `${pct}%`;
+  document.getElementById('progressCount').textContent = `${count} / ${total}`;
+  document.getElementById('progressTitle').textContent = currentTitle || '';
+  document.getElementById('progressLabel').textContent =
+    count === total && total > 0 ? '✅ Import complete' : 'Importing...';
+}
 
-  if (!tab?.url?.includes('gemini.google.com')) {
-    setStatus('Open gemini.google.com first.', '#ea4335');
-    resetBtn();
-    return;
-  }
+function hideProgress() { document.getElementById('progressSection').classList.remove('visible'); }
 
-  // Always navigate to the base app page so the full sidebar is loaded.
-  // (On a specific conversation page the sidebar may not have scrolled to
-  //  load older chats, so we always start fresh from /app.)
-  setStatus('Opening Gemini sidebar…', '#aaa');
-  await chrome.tabs.update(tab.id, { url: 'https://gemini.google.com/app' });
-
-  await new Promise((resolve) => {
+// Navigate tab to URL and wait for it to fully load + extra settle time
+function navigateAndWait(tabId, url, extraMs = EXTRA_WAIT) {
+  return new Promise((resolve) => {
+    chrome.tabs.update(tabId, { url });
     const onUpdate = (id, info) => {
-      if (id === tab.id && info.status === 'complete') {
-        chrome.tabs.onUpdated.removeListener(onUpdate);
-        // Extra 1.5 s for Angular to render the sidebar
-        setTimeout(resolve, 1500);
-      }
+      if (id !== tabId || info.status !== 'complete') return;
+      chrome.tabs.onUpdated.removeListener(onUpdate);
+      setTimeout(resolve, extraMs);
     };
     chrome.tabs.onUpdated.addListener(onUpdate);
-    setTimeout(resolve, 8000); // hard fallback
+    setTimeout(resolve, 12000); // hard fallback
   });
+}
 
-  setStatus('Reading conversation list…', '#aaa');
-
-  let response;
-  try {
-    response = await sendWithRetry(tab.id, { action: 'extractRecents' });
-  } catch (err) {
-    setStatus('Refresh gemini.google.com and try again.', '#ea4335');
-    setDetails('Content script not reachable — page may still be loading.');
-    resetBtn();
-    return;
+async function waitForPageReady(tabId, maxWaitMs = 30000) {
+  const start = Date.now(); let lastCount = 0, stableCount = 0;
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const r = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+      if (r?.pong) { const n = r.messageCount || 0; if (n === lastCount) { stableCount++; if (stableCount >= 3) return true; } else { stableCount = 0; lastCount = n; } }
+    } catch {}
+    await new Promise(r => setTimeout(r, 1000));
   }
+  return true;
+}
 
-  const threads = response?.threads || [];
-  if (threads.length === 0) {
-    setStatus('No conversations found in sidebar.', '#888');
-    resetBtn();
-    return;
-  }
+function resetBulkBtn() {
+  isBulkRunning = false;
+  const btn = document.getElementById('btnBulkImport');
+  btn.disabled = false;
+  btn.textContent = '⚡ Bulk Import All Past Chats';
+}
 
-  setStatus(`Found ${threads.length} conversations! Starting scan…`, '#aaa');
-  setProgress(1);
+document.getElementById('btnBulkImport').addEventListener('click', async () => {
+  if (isBulkRunning) return;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab.url?.includes(PLATFORM_URL)) { showToast(`Open ${PLATFORM_URL} first`, 'error'); return; }
 
-  chrome.runtime.sendMessage({ action: 'scrapeAllConversations', threads }, (result) => {
+  isBulkRunning = true;
+  document.getElementById('btnBulkImport').disabled = true;
+  document.getElementById('btnBulkImport').textContent = '⏳ Loading sidebar...';
+  showProgress(0, 0, 'Navigating to sidebar...');
+
+  // ── Step 1: navigate to the sidebar page and wait ──────────
+  await navigateAndWait(tab.id, BASE_URL, EXTRA_WAIT);
+
+  // ── Step 2: ask content script for conversation list ───────
+  chrome.tabs.sendMessage(tab.id, { type: 'GET_SIDEBAR_CHATS' }, async (threads) => {
     if (chrome.runtime.lastError) {
-      setStatus(`Error: ${chrome.runtime.lastError.message}`, '#ea4335');
-      resetBtn();
-      return;
+      showToast('Page not ready — refresh and try again', 'error');
+      resetBulkBtn(); hideProgress(); return;
+    }
+    if (!threads || threads.length === 0) {
+      showToast('No chats found in sidebar', 'error');
+      resetBulkBtn(); hideProgress(); return;
     }
 
-    const convs          = result?.conversations || [];
-    const totalMsgs      = convs.reduce((acc, c) => acc + (c.newMessagesCount || 0), 0);
-    const chatsWithMsgs  = convs.filter(c => c.newMessagesCount > 0).length;
-
-    setStatus(`✓ Done! ${chatsWithMsgs} chats — ${totalMsgs} messages`, '#34a853');
-    setDetails('JSON auto-downloading…');
-    setProgress(100);
-    downloadJsonBtn.style.display = 'flex';
-    resetBtn();
-  });
-}
-
-function resetBtn() {
-  extractAllBtn.disabled = false;
-  extractAllBtn.textContent = '🔄 Scan All Conversations';
-}
-
-extractAllBtn.addEventListener('click', extractAllConversations);
-
-// ── Download JSON ──────────────────────────────────────────
-downloadJsonBtn.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'EXPORT_DATA' }, (data) => {
-    if (!data) { setStatus('No data to download.', '#ea4335'); return; }
-    const json     = JSON.stringify(data, null, 2);
-    const dataUrl  = 'data:application/json;charset=utf-8,' + encodeURIComponent(json);
-    const filename = `brain_shadow_gemini_${new Date().toISOString().slice(0, 10)}.json`;
-    chrome.downloads.download({ url: dataUrl, filename, saveAs: false }, () => {
-      setStatus('✓ Downloaded!', '#34a853');
-      setTimeout(() => setStatus(''), 2000);
+    // ── Skip already-captured conversations ──────────────────
+    const existingConvs = await chrome.runtime.sendMessage({ type: 'GET_ALL_CONVERSATIONS' });
+    const capturedPaths = new Set(
+      (existingConvs || []).map(c => { try { return new URL(c.url).pathname; } catch { return c.url; } })
+    );
+    const newThreads = threads.filter(t => {
+      try { return !capturedPaths.has(new URL(t.url).pathname); } catch { return true; }
     });
+    const skippedCount = threads.length - newThreads.length;
+
+    if (newThreads.length === 0) {
+      showToast(skippedCount > 0 ? `All ${threads.length} chats already captured!` : 'No new chats found', 'success');
+      resetBulkBtn(); hideProgress(); return;
+    }
+    if (skippedCount > 0) console.log(`[Brain Shadow] Skipping ${skippedCount} already-captured chats`);
+
+    showProgress(0, newThreads.length, `${newThreads.length} new chats (${skippedCount} already captured)`);
+    let savedCount = 0;
+
+    for (let i = 0; i < newThreads.length; i++) {
+      const { url, title } = newThreads[i];
+      showProgress(i, newThreads.length, title);
+      try {
+        await navigateAndWait(tab.id, url, 1500);
+        await waitForPageReady(tab.id);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try { const r = await chrome.tabs.sendMessage(tab.id, { type: 'CAPTURE_CURRENT' }); if (r?.status === 'saved' || r?.status === 'skipped') break; } catch {}
+          await new Promise(r => setTimeout(r, 2000));
+        }
+        savedCount++;
+      } catch (e) { console.error('[Brain Shadow] Error on chat', i, e); }
+      await new Promise(r => setTimeout(r, 300));
+      if (i % 3 === 0) { loadStats(); loadRecentConversations(); }
+    }
+
+    resetBulkBtn();
+    showProgress(newThreads.length, newThreads.length, `Done! Saved ${savedCount} new conversations`);
+    showToast(`Done! ${savedCount} chats saved`, 'success');
+    loadStats(); loadRecentConversations();
+    setTimeout(hideProgress, 4000);
   });
 });
 
-// ── Clear cache ────────────────────────────────────────────
-clearCacheBtn.addEventListener('click', () => {
-  if (!confirm('Clear all saved Brain Shadow data? This cannot be undone.')) return;
-  chrome.runtime.sendMessage({ type: 'CLEAR_DATA' }, () => {
-    setStatus('✓ All data cleared.', '#34a853');
-    setDetails('');
-    setProgress(0);
-    downloadJsonBtn.style.display = 'none';
-    setTimeout(() => setStatus(''), 3000);
+document.getElementById('btnCaptureCurrent').addEventListener('click', async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab.url?.includes(PLATFORM_URL)) { showToast(`Open ${PLATFORM_URL} first`, 'error'); return; }
+  chrome.tabs.sendMessage(tab.id, { type: 'CAPTURE_CURRENT' }, () => {
+    setTimeout(async () => { await loadStats(); await loadRecentConversations(); showToast('Captured!', 'success'); }, 800);
   });
 });
 
-// ── Backend URL ────────────────────────────────────────────
-btnSaveUrl.addEventListener('click', () => {
-  const url = backendUrlEl.value.trim();
+document.getElementById('btnExport').addEventListener('click', async () => {
+  const data = await chrome.runtime.sendMessage({ type: 'EXPORT_DATA' });
+  if (!data?.conversations?.length) { showToast('No data to export', 'error'); return; }
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${EXPORT_NAME}_${new Date().toISOString().split('T')[0]}.json`; a.click();
+  URL.revokeObjectURL(url);
+  showToast(`Exported ${data.conversations.length} conversations`, 'success');
+});
+
+document.getElementById('btnClear').addEventListener('click', async () => {
+  if (!confirm('Delete all captured conversations? This cannot be undone.')) return;
+  await chrome.runtime.sendMessage({ type: 'CLEAR_DATA' });
+  await loadStats(); await loadRecentConversations(); showToast('All data cleared');
+});
+
+document.getElementById('btnSaveUrl').addEventListener('click', async () => {
+  const url = document.getElementById('backendUrl').value.trim();
   if (!url) return;
-  chrome.runtime.sendMessage({ type: 'SET_BACKEND_URL', url }, () => {
-    setStatus('Backend URL saved.', '#34a853');
-    setTimeout(() => setStatus(''), 1500);
-  });
+  await chrome.runtime.sendMessage({ type: 'SET_BACKEND_URL', url });
+  showToast('Backend URL saved', 'success');
 });
 
-// ── Init ───────────────────────────────────────────────────
-chrome.runtime.sendMessage({ type: 'GET_BACKEND_URL' }, (result) => {
-  backendUrlEl.value = result?.url || 'http://localhost:8000';
-});
+(async () => {
+  const result = await chrome.runtime.sendMessage({ type: 'GET_BACKEND_URL' });
+  document.getElementById('backendUrl').value = result?.url || 'http://localhost:8000';
+  await loadStats(); await loadRecentConversations();
+})();

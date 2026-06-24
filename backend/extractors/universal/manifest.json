@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "Brain Shadow — Universal",
+  "version": "1.0",
+  "description": "Capture conversations from all AI platforms and sync to Brain Shadow backend.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "downloads",
+    "scripting",
+    "tabs",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://chat.openai.com/*",
+    "https://chatgpt.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*",
+    "https://www.blackbox.ai/*",
+    "https://chat.deepseek.com/*",
+    "https://copilot.microsoft.com/*",
+    "https://github.com/copilot*",
+    "https://www.perplexity.ai/*",
+    "https://grok.com/*",
+    "https://x.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://www.blackbox.ai/*",
+        "https://chat.deepseek.com/*",
+        "https://copilot.microsoft.com/*",
+        "https://github.com/copilot*",
+        "https://www.perplexity.ai/*",
+        "https://grok.com/*",
+        "https://x.com/i/grok*"
+      ],
+      "js": ["fetch.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

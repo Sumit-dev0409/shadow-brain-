@@ -1,11 +1,11 @@
-import { Message } from "@/app/types";
+import { Message, ChatSession, BackendConversation } from "@/app/types";
 
-const BACKEND_URL = "http://localhost:8000";
-
+// ── ID helper ──────────────────────────────────────────────
 export function generateId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
+// ── Time formatter ─────────────────────────────────────────
 export function formatTime(date: Date): string {
   const now  = new Date();
   const diff = now.getTime() - date.getTime();
@@ -16,10 +16,73 @@ export function formatTime(date: Date): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-// Calls the Brain Shadow backend which forwards to OpenRouter
+// ── Platform emoji helper ──────────────────────────────────
+export function platformEmoji(platform?: string): string {
+  const map: Record<string, string> = {
+    chatgpt:    "🤖",
+    claude:     "🧠",
+    gemini:     "✨",
+    deepseek:   "⬡",
+    blackbox:   "■",
+    copilot:    "🪟",
+    mscopilot:  "🪟",
+    perplexity: "🔍",
+    grok:       "𝕏",
+  };
+  return map[platform?.toLowerCase() || ""] || "💬";
+}
+
+// ── Convert backend conversation → ChatSession ─────────────
+export function toSession(conv: BackendConversation): ChatSession {
+  const messages: Message[] = (conv.messages || []).map((m, i) => ({
+    id:        m._id || generateId(),
+    role:      (m.role === "user" ? "user" : "assistant") as "user" | "assistant",
+    content:   m.content || "",
+    timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+  }));
+
+  const lastMsg = messages[messages.length - 1];
+
+  return {
+    id:              conv._id,
+    title:           conv.title || conv.metadata?.topic || "Untitled",
+    messages,
+    createdAt:       new Date(conv.createdAt),
+    lastMessageAt:   lastMsg?.timestamp || new Date(conv.updatedAt || conv.createdAt),
+    platform:        conv.platform,
+    externalId:      conv.externalId,
+    url:             conv.metadata?.url,
+    topic:           conv.metadata?.topic,
+    summary:         conv.metadata?.summary,
+    importanceScore: conv.metadata?.importance_score,
+    isFromBackend:   true,
+  };
+}
+
+// ── Fetch conversations from backend (via Next.js proxy) ───
+export async function fetchConversations(platform?: string): Promise<ChatSession[]> {
+  try {
+    const params = new URLSearchParams({ limit: "100" });
+    if (platform) params.set("platform", platform);
+
+    const res = await fetch(`/api/conversations?${params}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const conversations: BackendConversation[] = await res.json();
+    return conversations
+      .map(toSession)
+      .sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime());
+  } catch (err) {
+    console.error("[Brain Shadow] fetchConversations failed:", err);
+    return [];
+  }
+}
+
+// ── AI chat via backend → OpenRouter ──────────────────────
 export async function getAIResponse(
   text: string,
-  history: Message[]
+  history: Message[],
+  systemPrompt?: string
 ): Promise<string> {
   try {
     const messages = [
@@ -27,10 +90,10 @@ export async function getAIResponse(
       { role: "user" as const, content: text },
     ];
 
-    const res = await fetch(`${BACKEND_URL}/api/chat`, {
+    const res = await fetch("/api/chat", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ messages }),
+      body:    JSON.stringify({ messages, systemPrompt }),
     });
 
     if (!res.ok) {
@@ -43,51 +106,6 @@ export async function getAIResponse(
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[Brain Shadow] Chat error:", msg);
-    return `Backend offline or error: ${msg}\n\nStart it with:\n\`cd backend/server && npm install && node index.js\``;
+    return `⚠️ Backend offline or error: ${msg}\n\nMake sure the backend is running:\n\`cd backend/backend && node src/server.js\``;
   }
 }
-
-export const INITIAL_SESSIONS = [
-  {
-    id:            "s1",
-    title:         "Project deadline reminders",
-    messages:      [] as Message[],
-    createdAt:     new Date(),
-    lastMessageAt: new Date(),
-  },
-  {
-    id:            "s2",
-    title:         "Workout routine planning",
-    messages:      [] as Message[],
-    createdAt:     new Date(Date.now() - 86400000),
-    lastMessageAt: new Date(Date.now() - 86400000),
-  },
-  {
-    id:            "s3",
-    title:         "Book recommendations list",
-    messages:      [] as Message[],
-    createdAt:     new Date(Date.now() - 86400000 * 2),
-    lastMessageAt: new Date(Date.now() - 86400000 * 2),
-  },
-  {
-    id:            "s4",
-    title:         "Meeting notes — Q3 review",
-    messages:      [] as Message[],
-    createdAt:     new Date(Date.now() - 86400000 * 3),
-    lastMessageAt: new Date(Date.now() - 86400000 * 3),
-  },
-  {
-    id:            "s5",
-    title:         "Travel itinerary for Japan",
-    messages:      [] as Message[],
-    createdAt:     new Date(Date.now() - 86400000 * 5),
-    lastMessageAt: new Date(Date.now() - 86400000 * 5),
-  },
-  {
-    id:            "s6",
-    title:         "Recipe ideas for the week",
-    messages:      [] as Message[],
-    createdAt:     new Date(Date.now() - 86400000 * 7),
-    lastMessageAt: new Date(Date.now() - 86400000 * 7),
-  },
-];

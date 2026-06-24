@@ -1,0 +1,20 @@
+{
+  "savedAtExtension": "2026-06-18T19:50:13.5892502+05:30",
+  "url": null,
+  "category": "Technical",
+  "enriched_at": "2026-06-18T16:52:47.263Z",
+  "enrichment_version": "1.0.0",
+  "entities": [
+    "Brain Shadow",
+    "Antigravity"
+  ],
+  "importance_score": 5,
+  "keywords": [
+    "test",
+    "metadata",
+    "fix"
+  ],
+  "status": "COMPLETED",
+  "summary": "This is a test summary for verification.",
+  "topic": "Test Topic"
+}
