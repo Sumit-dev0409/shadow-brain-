@@ -54,23 +54,29 @@ async function saveConversation(data, source = 'realtime') {
 
 // ── Update stats ───────────────────────────────────────────
 async function updateMeta(conversations) {
-  const allConvs     = Object.values(conversations);
-  const platforms    = {};
-  let totalMessages  = 0;
+  const allConvs    = Object.values(conversations);
+  const platforms   = {};
+  let totalMessages = 0;
 
   allConvs.forEach(conv => {
     platforms[conv.platform] = (platforms[conv.platform] || 0) + 1;
-    totalMessages += conv.message_count || 0;
+    const count = conv.message_count ?? conv.messages?.length ?? 0;
+    totalMessages += typeof count === 'number' ? count : 0;
   });
 
-  await chrome.storage.local.set({
-    [META_KEY]: {
-      total_conversations: allConvs.length,
-      total_messages:      totalMessages,
-      platforms,
-      last_updated:        new Date().toISOString()
-    }
-  });
+  const meta = {
+    total_conversations: allConvs.length,
+    total_messages:      totalMessages,
+    platforms,
+    last_updated:        new Date().toISOString(),
+  };
+
+  await chrome.storage.local.set({ [META_KEY]: meta });
+
+  // Update extension icon badge
+  const badgeText = allConvs.length > 0 ? String(allConvs.length) : '';
+  chrome.action.setBadgeText({ text: badgeText });
+  chrome.action.setBadgeBackgroundColor({ color: '#7c6aff' });
 }
 
 // ── Sync to FastAPI backend ────────────────────────────────
@@ -131,8 +137,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'GET_META') {
-    chrome.storage.local.get(META_KEY).then(result => {
-      sendResponse(result[META_KEY] || { total_conversations: 0, total_messages: 0, platforms: {} });
+    chrome.storage.local.get([META_KEY, STORAGE_KEY]).then(async result => {
+      let meta = result[META_KEY];
+      // If meta is missing but conversations exist, recompute
+      if (!meta && result[STORAGE_KEY] && Object.keys(result[STORAGE_KEY]).length > 0) {
+        await updateMeta(result[STORAGE_KEY]);
+        const fresh = await chrome.storage.local.get(META_KEY);
+        meta = fresh[META_KEY];
+      }
+      sendResponse(meta || { total_conversations: 0, total_messages: 0, platforms: {} });
     });
     return true;
   }

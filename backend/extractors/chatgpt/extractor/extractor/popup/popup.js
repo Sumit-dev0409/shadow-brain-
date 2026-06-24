@@ -14,23 +14,30 @@ function showToast(msg, type = '') {
 
 // ── Load and display stats ─────────────────────────────────
 async function loadStats() {
-  const meta = await chrome.runtime.sendMessage({ type: 'GET_META' });
+  let meta;
+  try {
+    meta = await chrome.runtime.sendMessage({ type: 'GET_META' });
+  } catch (e) {
+    console.warn('[Brain Shadow] GET_META failed:', e);
+    meta = null;
+  }
 
-  document.getElementById('totalConvs').textContent = meta.total_conversations || 0;
-  document.getElementById('totalMsgs').textContent = meta.total_messages || 0;
+  if (!meta) meta = { total_conversations: 0, total_messages: 0, platforms: {} };
+
+  document.getElementById('totalConvs').textContent = meta.total_conversations ?? 0;
+  document.getElementById('totalMsgs').textContent  = meta.total_messages      ?? 0;
   document.getElementById('totalPlatforms').textContent = Object.keys(meta.platforms || {}).length;
 
   // Update platform badges
   const platforms = meta.platforms || {};
   ['chatgpt', 'claude', 'deepseek'].forEach(p => {
     const badge = document.getElementById(`badge-${p}`);
-    if (badge) {
-      if (platforms[p]) {
-        badge.classList.add('active');
-        badge.innerHTML = `<span class="dot"></span>${p === 'chatgpt' ? 'ChatGPT' : p.charAt(0).toUpperCase() + p.slice(1)} (${platforms[p]})`;
-      } else {
-        badge.classList.remove('active');
-      }
+    if (!badge) return;
+    if (platforms[p]) {
+      badge.classList.add('active');
+      badge.innerHTML = `<span class="dot"></span>${p === 'chatgpt' ? 'ChatGPT' : p.charAt(0).toUpperCase() + p.slice(1)} (${platforms[p]})`;
+    } else {
+      badge.classList.remove('active');
     }
   });
 }
