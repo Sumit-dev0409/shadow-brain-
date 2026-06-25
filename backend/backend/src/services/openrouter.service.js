@@ -84,15 +84,11 @@ ${conversationText}`;
     try {
       logger.info(`DEBUG: [OPENROUTER API CALL] Model: ${config.openrouter.model}`);
       const response = await this.client.chat.completions.create({
-        model: config.openrouter.model,
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        max_tokens: 1024,
-        temperature: 0.7,
+        model:           config.openrouter.model,
+        messages:        [{ role: 'user', content: prompt }],
+        max_tokens:      1024,
+        temperature:     0.1,
+        response_format: { type: 'json_object' },
       });
 
       if (!response.choices || response.choices.length === 0) {

@@ -42,15 +42,15 @@ class EnrichmentService {
       }
 
       const enrichment = {
-        topic: rawMetadata.topic,
-        category: rawMetadata.category,
-        summary: rawMetadata.summary,
-        keywords: rawMetadata.keywords,
-        entities: rawMetadata.entities,
-        importance_score: rawMetadata.importance_score,
-        enriched_at: new Date(),
-        enrichment_version: '1.0.0',
-        status: 'COMPLETED'
+        topic:               rawMetadata.topic,
+        category:            rawMetadata.category,
+        summary:             rawMetadata.summary,
+        keywords:            Array.isArray(rawMetadata.keywords)  ? rawMetadata.keywords  : [],
+        entities:            Array.isArray(rawMetadata.entities)  ? rawMetadata.entities  : [],
+        importance_score:    Number(rawMetadata.importance_score) || 1,
+        enriched_at:         new Date(),
+        enrichment_version:  '1.0.0',
+        status:              'COMPLETED',
       };
 
       await conversationService.updateEnrichment(conversationId, enrichment);
@@ -77,7 +77,9 @@ class EnrichmentService {
   }
 
   extractConversationText(conversation) {
-    return conversation.messages.map(m => m.content).join(' ');
+    return conversation.messages
+      .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+      .join('\n\n');
   }
 }
 
