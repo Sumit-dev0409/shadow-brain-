@@ -2,7 +2,7 @@ module.exports = {
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY,
     baseUrl: 'https://openrouter.ai/api/v1',
-    model: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.1-70b-instruct', // Match original default
+    model: process.env.OPENROUTER_MODEL || 'google/gemma-4-26b-a4b-it:free',
   },
   rateLimit: {
     perMinute: 20,

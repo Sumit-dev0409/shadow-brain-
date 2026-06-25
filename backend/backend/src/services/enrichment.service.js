@@ -60,7 +60,7 @@ class EnrichmentService {
       logger.error(`Enrichment attempt ${attempt} failed for ${conversationId}: ${error.message}`);
 
       if (attempt < 3) {
-        const delay = attempt * 2000; // Exponential backoff (2s, 4s)
+        const delay = attempt * 15000; // Exponential backoff (15s, 30s) — gives rate limits time to clear
         logger.info(`Retrying enrichment for ${conversationId} in ${delay}ms... (Attempt ${attempt + 1})`);
         
         setTimeout(() => {

@@ -5,11 +5,12 @@ const logger = require('../utils/logger');
 class OpenRouterService {
   constructor() {
     this.client = new OpenAI({
-      apiKey: config.openrouter.apiKey,
-      baseURL: config.openrouter.baseUrl,
+      apiKey:   config.openrouter.apiKey,
+      baseURL:  config.openrouter.baseUrl,
+      timeout:  30000,
       defaultHeaders: {
         'HTTP-Referer': 'https://brain-shadow.local',
-        'X-Title': 'Brain Shadow',
+        'X-Title':      'Brain Shadow',
       },
     });
   }
@@ -84,11 +85,10 @@ ${conversationText}`;
     try {
       logger.info(`DEBUG: [OPENROUTER API CALL] Model: ${config.openrouter.model}`);
       const response = await this.client.chat.completions.create({
-        model:           config.openrouter.model,
-        messages:        [{ role: 'user', content: prompt }],
-        max_tokens:      1024,
-        temperature:     0.1,
-        response_format: { type: 'json_object' },
+        model:       config.openrouter.model,
+        messages:    [{ role: 'user', content: prompt }],
+        max_tokens:  450,
+        temperature: 0.1,
       });
 
       if (!response.choices || response.choices.length === 0) {
