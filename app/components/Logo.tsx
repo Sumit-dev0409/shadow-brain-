@@ -46,7 +46,7 @@ export function Logo({ collapsed = false }: LogoProps) {
               backgroundClip: "text",
             }}
           >
-            Brain Shadow
+            Shadow Brain
           </span>
           <span
             className="text-[10px] font-medium tracking-widest uppercase"

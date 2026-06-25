@@ -59,7 +59,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={handleKeyDown}
             onInput={handleInput}
-            placeholder="Ask Brain Shadow anything…"
+            placeholder="Ask Shadow Brain anything…"
             rows={1}
             disabled={disabled}
             className="flex-1 resize-none outline-none text-[13.5px] leading-[1.6] bg-transparent"
@@ -115,7 +115,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       </div>
 
       <p className="text-center text-[10.5px] mt-2 max-w-[780px] mx-auto" style={{ color: "var(--text-muted)" }}>
-        Brain Shadow remembers context across all your past conversations.
+        Shadow Brain remembers context across all your past conversations.
       </p>
     </div>
   );

@@ -1,159 +1,151 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { Sidebar }  from "./components/Sidebar";
-import { ChatArea } from "./components/ChatArea";
-import { Message, ChatSession } from "./types";
-import { generateId, getAIResponse, fetchConversations } from "./lib/utils";
+import { Sidebar } from "./components/Sidebar";
+import { RightPanel, SearchRecord } from "./components/RightPanel";
+import { GraphCenter } from "./components/GraphCenter";
+import { AuthScreen } from "./components/AuthScreen";
+import { AgentSelectScreen } from "./components/AgentSelectScreen";
+import { ChatSession } from "./types";
+import { generateId, INITIAL_SESSIONS } from "./lib/utils";
+import {
+  clearSelectedAgents,
+  clearSession,
+  getSelectedAgents,
+  getSession,
+  setSelectedAgents,
+} from "./lib/auth";
+
+type Stage = "loading" | "auth" | "select-agents" | "app";
+
+interface AuthState {
+  stage: Stage;
+  userEmail: string | null;
+  selectedAgents: string[];
+}
 
 export default function Home() {
-  const [sessions,     setSessions]     = useState<ChatSession[]>([]);
-  const [activeId,     setActiveId]     = useState<string>("");
-  const [isTyping,     setIsTyping]     = useState(false);
+  const [auth, setAuth] = useState<AuthState>({
+    stage: "loading",
+    userEmail: null,
+    selectedAgents: [],
+  });
+  const { stage, userEmail, selectedAgents } = auth;
+
+  const [sessions, setSessions] = useState<ChatSession[]>(INITIAL_SESSIONS);
+  const [activeId, setActiveId] = useState<string>(INITIAL_SESSIONS[0].id);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const [isLoading,    setIsLoading]    = useState(true);
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [searchHistory, setSearchHistory] = useState<SearchRecord[]>([]);
 
-  const activeSession = sessions.find((s) => s.id === activeId);
-
-  // ── Load captured conversations from MongoDB on mount ────
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    (async () => {
-      setIsLoading(true);
-      const loaded = await fetchConversations();
-      if (loaded.length > 0) {
-        setSessions(loaded);
-        setActiveId(loaded[0].id);
-      } else {
-        // No backend data yet — start with an empty new chat
-        const empty = makeNewSession();
-        setSessions([empty]);
-        setActiveId(empty.id);
-      }
-      setIsLoading(false);
-    })();
+    const session = getSession();
+    if (!session) {
+      setAuth({ stage: "auth", userEmail: null, selectedAgents: [] });
+      return;
+    }
+
+    const agents = getSelectedAgents();
+    if (agents.length === 0) {
+      setAuth({ stage: "select-agents", userEmail: session.email, selectedAgents: [] });
+      return;
+    }
+    setAuth({ stage: "app", userEmail: session.email, selectedAgents: agents });
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const handleAuthenticated = useCallback((email: string) => {
+    const agents = getSelectedAgents();
+    setAuth({
+      stage: agents.length === 0 ? "select-agents" : "app",
+      userEmail: email,
+      selectedAgents: agents,
+    });
   }, []);
 
-  // ── Helpers ───────────────────────────────────────────────
-  function makeNewSession(): ChatSession {
-    return {
-      id:            generateId(),
-      title:         "New conversation",
-      messages:      [],
-      createdAt:     new Date(),
+  const handleAgentsSelected = useCallback((agents: string[]) => {
+    setSelectedAgents(agents);
+    setAuth((prev) => ({ ...prev, stage: "app", selectedAgents: agents }));
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    clearSession();
+    clearSelectedAgents();
+    setAuth({ stage: "auth", userEmail: null, selectedAgents: [] });
+  }, []);
+
+  const handleNewChat = useCallback(() => {
+    const newSession: ChatSession = {
+      id: generateId(),
+      title: "New conversation",
+      messages: [],
+      createdAt: new Date(),
       lastMessageAt: new Date(),
     };
-  }
-
-  // ── Send message ──────────────────────────────────────────
-  const handleSend = useCallback(
-    async (text: string) => {
-      if (isTyping || !activeId) return;
-
-      const userMsg: Message = {
-        id:        generateId(),
-        role:      "user",
-        content:   text,
-        timestamp: new Date(),
-      };
-
-      const currentHistory = activeSession?.messages ?? [];
-
-      setSessions((prev) =>
-        prev.map((s) =>
-          s.id === activeId
-            ? { ...s, messages: [...s.messages, userMsg], lastMessageAt: new Date(),
-                title: s.messages.length === 0 ? text.slice(0, 50) : s.title }
-            : s
-        )
-      );
-
-      setIsTyping(true);
-
-      try {
-        // Build system prompt from the conversation's metadata if it was captured
-        const session = sessions.find(s => s.id === activeId);
-        const systemPrompt = session?.summary
-          ? `This conversation was originally captured from ${session.platform || 'an AI platform'}. Topic: ${session.topic || ''}. Summary: ${session.summary}`
-          : undefined;
-
-        const content = await getAIResponse(text, currentHistory, systemPrompt);
-
-        const aiMsg: Message = {
-          id:        generateId(),
-          role:      "assistant",
-          content,
-          timestamp: new Date(),
-        };
-
-        setSessions((prev) =>
-          prev.map((s) =>
-            s.id === activeId
-              ? { ...s, messages: [...s.messages, aiMsg], lastMessageAt: new Date() }
-              : s
-          )
-        );
-      } finally {
-        setIsTyping(false);
-      }
-    },
-    [activeId, activeSession, isTyping, sessions]
-  );
-
-  // ── New chat ──────────────────────────────────────────────
-  const handleNewChat = useCallback(() => {
-    const s = makeNewSession();
-    setSessions((prev) => [s, ...prev]);
-    setActiveId(s.id);
-    setIsTyping(false);
-  }, []);
-
-  // ── Clear current chat ────────────────────────────────────
-  const handleClear = useCallback(() => {
-    setSessions((prev) =>
-      prev.map((s) => (s.id === activeId ? { ...s, messages: [] } : s))
-    );
-    setIsTyping(false);
-  }, [activeId]);
-
-  // ── Refresh from backend ──────────────────────────────────
-  const handleRefresh = useCallback(async () => {
-    setIsLoading(true);
-    const loaded = await fetchConversations();
-    if (loaded.length > 0) {
-      setSessions((prev) => {
-        // Keep any new (non-backend) sessions the user started, prepend loaded ones
-        const localOnly = prev.filter((s) => !s.isFromBackend);
-        return [...loaded, ...localOnly];
-      });
-    }
-    setIsLoading(false);
+    setSessions((prev) => [newSession, ...prev]);
+    setActiveId(newSession.id);
   }, []);
 
   const handleSelect = useCallback((id: string) => {
     setActiveId(id);
-    setIsTyping(false);
+    setIsMobileOpen(false);
   }, []);
+
+  const handleHistoryUpdate = useCallback((record: SearchRecord) => {
+    setSearchHistory((prev) => {
+      const filtered = prev.filter((r) => r.keyword !== record.keyword);
+      return [record, ...filtered];
+    });
+  }, []);
+
+  // Forget all past search history
+  const handleForgetPast = useCallback(() => {
+    setSearchHistory([]);
+    setSearchKeyword("");
+  }, []);
+
+  if (stage === "loading") {
+    return <div className="min-h-screen w-full" style={{ background: "var(--bg-deep)" }} />;
+  }
+
+  if (stage === "auth") {
+    return <AuthScreen onAuthenticated={handleAuthenticated} />;
+  }
+
+  if (stage === "select-agents") {
+    return <AgentSelectScreen initialSelected={selectedAgents} onContinue={handleAgentsSelected} />;
+  }
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg-deep)" }}>
+      {/* Left sidebar */}
       <Sidebar
         sessions={sessions}
         activeId={activeId}
         onSelect={handleSelect}
         onNewChat={handleNewChat}
-        onRefresh={handleRefresh}
-        isLoading={isLoading}
         isMobileOpen={isMobileOpen}
         onMobileClose={() => setIsMobileOpen(false)}
+        userEmail={userEmail ?? undefined}
+        agentCount={selectedAgents.length}
+        onChangeAgents={() => setAuth((prev) => ({ ...prev, stage: "select-agents" }))}
+        onLogout={handleLogout}
       />
-      <ChatArea
-        session={activeSession}
-        messages={activeSession?.messages ?? []}
-        isTyping={isTyping}
-        onSend={handleSend}
-        onSuggest={handleSend}
-        onClear={handleClear}
-        onMenuClick={() => setIsMobileOpen(true)}
+
+      {/* Center — Obsidian brain graph */}
+      <GraphCenter
+        searchKeyword={searchKeyword}
+        sessions={sessions}
+      />
+
+      {/* Right panel — search + history */}
+      <RightPanel
+        searchKeyword={searchKeyword}
+        onSearchChange={setSearchKeyword}
+        searchHistory={searchHistory}
+        onHistoryUpdate={handleHistoryUpdate}
+        onForgetPast={handleForgetPast}
       />
     </div>
   );

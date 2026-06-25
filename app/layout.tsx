@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Brain Shadow — AI Memory Assistant",
+  title: "Shadow Brain — AI Memory Assistant",
   description: "Your AI memory that never forgets",
 };
 

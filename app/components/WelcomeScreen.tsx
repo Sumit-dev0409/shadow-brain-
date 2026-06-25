@@ -45,7 +45,7 @@ export function WelcomeScreen({ onSuggest }: WelcomeProps) {
           Your AI Memory Never Forgets
         </h1>
         <p className="text-[13.5px] max-w-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-          Ask me anything. I remember everything you've shared — notes, tasks, and ideas — so you never have to repeat yourself.
+          Ask me anything. I remember everything you&apos;ve shared — notes, tasks, and ideas — so you never have to repeat yourself.
         </p>
       </motion.div>
 
