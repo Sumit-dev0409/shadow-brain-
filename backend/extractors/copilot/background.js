@@ -25,8 +25,15 @@ async function saveConversation(data, source = 'realtime') {
 async function updateMeta(conversations) {
   const allConvs = Object.values(conversations);
   const platforms = {}; let totalMessages = 0;
-  allConvs.forEach(conv => { platforms[conv.platform] = (platforms[conv.platform] || 0) + 1; totalMessages += conv.message_count || 0; });
-  await chrome.storage.local.set({ [META_KEY]: { total_conversations: allConvs.length, total_messages: totalMessages, platforms, last_updated: new Date().toISOString() } });
+  allConvs.forEach(conv => {
+    platforms[conv.platform] = (platforms[conv.platform] || 0) + 1;
+    const count = conv.message_count ?? conv.messages?.length ?? 0;
+    totalMessages += typeof count === 'number' ? count : 0;
+  });
+  const meta = { total_conversations: allConvs.length, total_messages: totalMessages, platforms, last_updated: new Date().toISOString() };
+  await chrome.storage.local.set({ [META_KEY]: meta });
+  chrome.action.setBadgeText({ text: allConvs.length > 0 ? String(allConvs.length) : '' });
+  chrome.action.setBadgeBackgroundColor({ color: '#7c6aff' });
 }
 
 async function syncToBackend(data) {
@@ -54,7 +61,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SAVE_CONVERSATION' || message.type === 'CONVERSATION_CAPTURED') { saveConversation(message.payload, 'realtime').then(sendResponse); return true; }
   if (message.type === 'SAVE_CONVERSATION_BULK') { saveConversation(message.payload, 'bulk').then(sendResponse); return true; }
   if (message.type === 'GET_ALL_CONVERSATIONS') { getAllConversations().then(sendResponse); return true; }
-  if (message.type === 'GET_META') { chrome.storage.local.get(META_KEY).then(r => sendResponse(r[META_KEY] || { total_conversations: 0, total_messages: 0, platforms: {} })); return true; }
+  if (message.type === 'GET_META') {
+    chrome.storage.local.get([META_KEY, STORAGE_KEY]).then(async result => {
+      let meta = result[META_KEY];
+      if (!meta && result[STORAGE_KEY] && Object.keys(result[STORAGE_KEY]).length > 0) {
+        await updateMeta(result[STORAGE_KEY]);
+        meta = (await chrome.storage.local.get(META_KEY))[META_KEY];
+      }
+      sendResponse(meta || { total_conversations: 0, total_messages: 0, platforms: {} });
+    });
+    return true;
+  }
   if (message.type === 'EXPORT_DATA') { exportAllData().then(sendResponse); return true; }
   if (message.type === 'CLEAR_DATA') { clearAllData().then(sendResponse); return true; }
   if (message.type === 'SET_BACKEND_URL') { chrome.storage.local.set({ [BACKEND_URL_KEY]: message.url }).then(() => sendResponse({ status: 'saved' })); return true; }

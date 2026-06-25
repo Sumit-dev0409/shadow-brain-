@@ -13,9 +13,11 @@ function showToast(msg, type = '') {
 }
 
 async function loadStats() {
-  const meta = await chrome.runtime.sendMessage({ type: 'GET_META' });
-  document.getElementById('totalConvs').textContent     = meta.total_conversations || 0;
-  document.getElementById('totalMsgs').textContent      = meta.total_messages      || 0;
+  let meta;
+  try { meta = await chrome.runtime.sendMessage({ type: 'GET_META' }); } catch (e) { meta = null; }
+  if (!meta) meta = { total_conversations: 0, total_messages: 0, platforms: {} };
+  document.getElementById('totalConvs').textContent     = meta.total_conversations ?? 0;
+  document.getElementById('totalMsgs').textContent      = meta.total_messages      ?? 0;
   document.getElementById('totalPlatforms').textContent = Object.keys(meta.platforms || {}).length;
   const platforms = meta.platforms || {};
   ['blackbox','chatgpt','claude','gemini','deepseek','copilot'].forEach(p => {
