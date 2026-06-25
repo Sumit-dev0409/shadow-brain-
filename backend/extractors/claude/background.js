@@ -1,4 +1,4 @@
-// Brain Shadow — Background Service Worker (Claude)
+﻿// Brain Shadow — Background Service Worker (Claude)
 
 const STORAGE_KEY     = 'brain_shadow_conversations';
 const META_KEY        = 'brain_shadow_meta';
@@ -16,7 +16,7 @@ async function saveConversation(data, source = 'realtime') {
     conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source };
     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
     await updateMeta(conversations);
-    syncToBackend(data).catch(() => {});
+    // Sync handled by popup (MV3 service workers cannot fetch localhost)
     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴 Live' : '📦 Bulk'} saved: ${data.title} (${data.messages.length} msgs)`);
     return { status: 'saved', key };
   } catch (err) { return { status: 'error', error: err.message }; }

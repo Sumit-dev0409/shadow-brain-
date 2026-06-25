@@ -44,9 +44,41 @@ function setBackendStatus(state, msg) {
 
 async function testBackend(url) {
   setBackendStatus('idle', 'Testing…');
-  const r = await chrome.runtime.sendMessage({ type: 'TEST_BACKEND', url });
-  setBackendStatus(r.ok ? 'ok' : 'error', r.ok ? '✓ Backend connected — auto-syncing' : '✗ Backend offline — run start.bat');
-  return r.ok;
+  try {
+    const backendUrl = (url || 'http://localhost:8000').replace(/\/$/, '');
+    const res = await fetch(`${backendUrl}/health`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setBackendStatus('ok', '✓ Backend connected — syncing all chats…');
+    // Sync all unsynced conversations directly from popup context
+    await syncAllToBackend(backendUrl);
+    return true;
+  } catch (err) {
+    setBackendStatus('error', `✗ Backend offline: ${err.message}`);
+    console.error('[Brain Shadow] Backend test failed:', err.message);
+    return false;
+  }
+}
+
+async function syncAllToBackend(backendUrl) {
+  const convs = await chrome.runtime.sendMessage({ type: 'GET_ALL_CONVERSATIONS' });
+  if (!convs?.length) return;
+  let synced = 0;
+  for (const conv of convs) {
+    try {
+      const res = await fetch(`${backendUrl}/api/import/capture`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(conv),
+      });
+      if (res.ok) synced++;
+    } catch {}
+  }
+  if (synced > 0) {
+    setBackendStatus('ok', `✓ Synced ${synced} / ${convs.length} chats to MongoDB`);
+    showToast(`Synced ${synced} chats to MongoDB ✅`, 'success');
+    await loadStats();
+    await loadRecentConversations();
+  }
 }
 
 // ── Stats + platform badges ────────────────────────────────
@@ -181,6 +213,25 @@ document.getElementById('btnBulkImport').addEventListener('click', async () => {
   }
 });
 
+// ── Sync All to MongoDB ────────────────────────────────────
+document.getElementById('btnSyncNow').addEventListener('click', async () => {
+  const btn = document.getElementById('btnSyncNow');
+  btn.disabled = true;
+  btn.textContent = '⏳ Syncing…';
+  const urlResult  = await chrome.runtime.sendMessage({ type: 'GET_BACKEND_URL' });
+  const backendUrl = (urlResult?.url || 'http://localhost:8000').replace(/\/$/, '');
+  try {
+    const res = await fetch(`${backendUrl}/health`);
+    if (!res.ok) throw new Error(`Backend returned ${res.status}`);
+    await syncAllToBackend(backendUrl);
+  } catch (e) {
+    setBackendStatus('error', `✗ ${e.message}`);
+    showToast(`Backend offline: ${e.message}`, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = '🔄 Sync All to MongoDB';
+});
+
 // ── Force Stop All ─────────────────────────────────────────
 document.getElementById('btnForceStop').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'STOP_ALL_IMPORTS' });
@@ -273,7 +324,6 @@ chrome.storage.onChanged.addListener((changes) => {
   const prog = await chrome.runtime.sendMessage({ type: 'GET_SCRAPE_PROGRESS' });
   if (prog) renderProgress(prog);
 
-  // Test backend
-  const r = await chrome.runtime.sendMessage({ type: 'TEST_BACKEND', url: urlResult?.url || 'http://localhost:8000' });
-  setBackendStatus(r.ok ? 'ok' : 'error', r.ok ? '✓ Backend connected — auto-syncing' : '✗ Backend offline — run start.bat');
+  // Test backend directly from popup (not via service worker)
+  await testBackend(urlResult?.url || 'http://localhost:8000');
 })();

@@ -1,38 +1,50 @@
-/**
- * Migrated from original validators.js
- */
+const VALID_CATEGORIES = [
+  'Technical', 'Business', 'Education', 'Creative',
+  'Troubleshooting', 'Question', 'Research', 'Planning',
+  'Implementation', 'Review', 'Other',
+];
 
-const METADATA_SCHEMA = {
-  type: 'object',
-  required: ['topic', 'category', 'summary', 'keywords', 'entities', 'importance_score'],
-  properties: {
-    topic: { type: 'string', minLength: 1, maxLength: 200 },
-    category: {
-      type: 'string',
-      enum: ['Technical', 'Business', 'Education', 'Creative', 'Troubleshooting', 'Question', 'Research', 'Planning', 'Implementation', 'Review', 'Other']
-    },
-    summary: { type: 'string', minLength: 10, maxLength: 1000 },
-    keywords: { type: 'array', minItems: 1, items: { type: 'string' } },
-    entities: { type: 'array', items: { type: 'string' } },
-    importance_score: { type: 'number', minimum: 1, maximum: 5 }
-  }
-};
-
+// Fill in sensible defaults for any missing/invalid fields
+// so enrichment never fails due to incomplete AI response
 function validateMetadata(metadata) {
-  const errors = [];
-  if (!metadata || typeof metadata !== 'object') return { valid: false, errors: ['Not an object'] };
-  
-  for (const field of METADATA_SCHEMA.required) {
-    if (!(field in metadata)) errors.push(`Missing ${field}`);
+  if (!metadata || typeof metadata !== 'object') {
+    return { valid: false, errors: ['Not an object'] };
   }
 
-  return { valid: errors.length === 0, errors };
+  if (!metadata.topic || typeof metadata.topic !== 'string') {
+    metadata.topic = 'General Conversation';
+  }
+
+  if (!VALID_CATEGORIES.includes(metadata.category)) {
+    metadata.category = 'Other';
+  }
+
+  if (!metadata.summary || typeof metadata.summary !== 'string' || metadata.summary.length < 5) {
+    metadata.summary = metadata.topic;
+  }
+
+  if (!Array.isArray(metadata.keywords) || metadata.keywords.length === 0) {
+    metadata.keywords = [metadata.topic];
+  }
+
+  if (!Array.isArray(metadata.entities)) {
+    metadata.entities = [];
+  }
+
+  const score = Number(metadata.importance_score);
+  if (!score || score < 1 || score > 5) {
+    metadata.importance_score = 3;
+  } else {
+    metadata.importance_score = score;
+  }
+
+  return { valid: true, errors: [] };
 }
 
 function parseJsonResponse(text) {
   if (!text) throw new Error('Empty AI response');
 
-  // 1. Try direct parse first (model obeyed instructions)
+  // 1. Direct parse
   try { return JSON.parse(text.trim()); } catch (_) {}
 
   // 2. Extract from code fence anywhere in the response
@@ -41,7 +53,7 @@ function parseJsonResponse(text) {
     try { return JSON.parse(fenceMatch[1].trim()); } catch (_) {}
   }
 
-  // 3. Extract the first {...} block (handles "Here is the JSON: {...}")
+  // 3. Extract first {...} block
   const braceStart = text.indexOf('{');
   const braceEnd   = text.lastIndexOf('}');
   if (braceStart !== -1 && braceEnd > braceStart) {
@@ -53,12 +65,11 @@ function parseJsonResponse(text) {
 
 function cleanConversationText(text) {
   if (!text) return '';
-  return text.trim().replace(/\s+/g, ' ').slice(0, 10000); // 10k limit
+  return text.trim().replace(/\s+/g, ' ').slice(0, 10000);
 }
 
 module.exports = {
-  METADATA_SCHEMA,
   validateMetadata,
   parseJsonResponse,
-  cleanConversationText
+  cleanConversationText,
 };

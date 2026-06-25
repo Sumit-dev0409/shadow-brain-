@@ -35,8 +35,8 @@ class EnrichmentService {
       const text        = this.extractConversationText(conversation);
       const cleanedText = cleanConversationText(text);
 
-      if (!cleanedText || cleanedText.length < 10) {
-        throw new Error('Conversation content is too short for enrichment');
+      if (!cleanedText || cleanedText.length < 3) {
+        throw new Error('Conversation content is empty');
       }
 
       const response    = await openRouterService.extractMetadata(cleanedText);
@@ -81,31 +81,45 @@ class EnrichmentService {
           });
         }, delay);
       } else {
-        await conversationService.updateStatus(conversationId, 'FAILED', `Failed after 3 attempts: ${error.message}`);
+        // Keep as PENDING instead of FAILED — auto-retry every 5 min will pick it up
+        await conversationService.updateStatus(conversationId, 'PENDING', null);
+        logger.warn(`[ENRICHMENT] Kept as PENDING after 3 attempts — will retry in 5 min`);
       }
     }
   }
 
-  // Called on server startup — re-enriches anything stuck as PENDING or PROCESSING
+  // Retries all FAILED/PENDING/PROCESSING conversations — runs on startup and every 5 min
   async retryPending() {
     const Conversation = require('../models/conversation.model');
-    const pending = await Conversation.find({ status: { $in: ['PENDING', 'PROCESSING'] } }).select('_id').lean();
+
+    // Reset all FAILED → PENDING so they get another chance
+    const resetResult = await Conversation.updateMany(
+      { status: 'FAILED' },
+      { $set: { status: 'PENDING', error: null } }
+    );
+
+    if (resetResult.modifiedCount > 0) {
+      logger.info(`[RETRY] Reset ${resetResult.modifiedCount} FAILED conversation(s) to PENDING`);
+    }
+
+    const pending = await Conversation.find(
+      { status: { $in: ['PENDING', 'PROCESSING'] } }
+    ).select('_id title').lean();
 
     if (pending.length === 0) {
-      logger.info('[STARTUP] No pending conversations to enrich');
+      logger.info('[RETRY] All conversations are COMPLETED — nothing to enrich');
       return;
     }
 
-    logger.info(`[STARTUP] Re-enriching ${pending.length} pending conversation(s)...`);
+    logger.info(`[RETRY] Enriching ${pending.length} conversation(s)...`);
 
-    for (let i = 0; i < pending.length; i++) {
-      // Stagger by 3s each to avoid hammering the API
+    pending.forEach((conv, i) => {
       setTimeout(() => {
-        this.process(pending[i]._id.toString()).catch(err => {
-          logger.error(`Startup re-enrich failed for ${pending[i]._id}: ${err.message}`);
+        this.process(conv._id.toString()).catch(err => {
+          logger.error(`[RETRY] Failed for "${conv.title}": ${err.message}`);
         });
       }, i * 3000);
-    }
+    });
   }
 
   extractConversationText(conversation) {

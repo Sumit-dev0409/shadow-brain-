@@ -293,7 +293,7 @@ function sendToBackground(conversation) {
 // ─── Capture pipeline ─────────────────────────────────────────────────────────
 let isCapturing = false;
 
-async function captureAndSend() {
+async function captureAndSend(scroll = false) {
 
   if (isCapturing) {
     return { status: 'busy' };
@@ -307,7 +307,7 @@ async function captureAndSend() {
 
     await waitForStreamingToFinish();
 
-    await scrollToLoadAllMessages();
+    if (scroll) await scrollToLoadAllMessages();
 
     const conversation = scrapeConversation();
 
@@ -431,7 +431,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === 'CAPTURE_CURRENT') {
 
-    captureAndSend()
+    captureAndSend(true)
     .then(sendResponse)
     .catch((err) => {
       sendResponse({

@@ -248,12 +248,13 @@ function init() {
   // ── Capture pipeline ─────────────────────────────────────
   let isCapturing = false;
 
-  async function captureAndSend() {
+  // scroll=true only when user clicks "Capture Current" — never during auto-capture
+  async function captureAndSend(scroll = false) {
     if (isCapturing) return { status: 'busy' };
     isCapturing = true;
     try {
       await waitForStreamingToFinish();
-      await scrollToLoadAllMessages();
+      if (scroll) await scrollToLoadAllMessages();
       const conversation = scrapeConversation();
       if (!conversation) return { status: 'empty' };
       const result = await new Promise((resolve) => {
@@ -384,7 +385,7 @@ function init() {
       return true;
     }
     if (request.type === 'CAPTURE_CURRENT') {
-      captureAndSend().then(sendResponse).catch(err => sendResponse({ status: 'error', error: err?.message }));
+      captureAndSend(true).then(sendResponse).catch(err => sendResponse({ status: 'error', error: err?.message }));
       return true;
     }
     if (request.type === 'PING') {

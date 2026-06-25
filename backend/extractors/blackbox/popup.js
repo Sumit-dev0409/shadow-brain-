@@ -160,8 +160,33 @@ document.getElementById('btnSaveUrl').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'SET_BACKEND_URL', url }); showToast('Backend URL saved', 'success');
 });
 
+async function checkAndSyncBackend() {
+  const r = await chrome.runtime.sendMessage({ type: 'GET_BACKEND_URL' });
+  const backendUrl = r?.url || 'http://localhost:8000';
+  document.getElementById('backendUrl').value = backendUrl;
+  try {
+    const res = await fetch(`${backendUrl}/health`);
+    if (!res.ok) { showToast('Backend error ❌', 'error'); return; }
+    showToast('Backend connected ✅', 'success');
+    const all = await chrome.runtime.sendMessage({ type: 'GET_ALL_CONVERSATIONS' });
+    let synced = 0;
+    for (const conv of (all || [])) {
+      try {
+        const resp = await fetch(`${backendUrl}/api/import/capture`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(conv)
+        });
+        if (resp.ok) synced++;
+      } catch {}
+    }
+    if (synced > 0) showToast(`Synced ${synced} chats to backend ✅`, 'success');
+  } catch (e) {
+    showToast(`Backend offline ❌ ${e.message}`, 'error');
+    console.error('[Brain Shadow] Backend offline:', e.message);
+  }
+}
+
 (async () => {
-  const result = await chrome.runtime.sendMessage({ type: 'GET_BACKEND_URL' });
-  document.getElementById('backendUrl').value = result?.url || 'http://localhost:8000';
-  await loadStats(); await loadRecentConversations();
+  await loadStats();
+  await loadRecentConversations();
+  await checkAndSyncBackend();
 })();

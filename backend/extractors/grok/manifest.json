@@ -11,10 +11,7 @@
     "tabs",
     "notifications"
   ],
-  "host_permissions": [
-    "https://grok.com/*",
-    "https://x.com/*"
-  ],
+  "host_permissions": ["<all_urls>", "http://localhost/*", "http://127.0.0.1/*"],
   "background": {
     "service_worker": "background.js"
   },

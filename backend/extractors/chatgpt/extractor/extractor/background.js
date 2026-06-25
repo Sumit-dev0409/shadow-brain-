@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // Brain Shadow — Background Service Worker (FIXED)
 //
 // FIX 1: Added handler for 'CONVERSATION_CAPTURED' (old message type)
@@ -41,7 +41,7 @@ async function saveConversation(data, source = 'realtime') {
 
     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
     await updateMeta(conversations);
-    syncToBackend(data).catch(() => {});
+    // Sync handled by popup (MV3 service workers cannot fetch localhost)
 
     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴 Live' : '📦 Bulk'} saved: ${data.title} (${data.messages.length} msgs)`);
     return { status: 'saved', key };

@@ -11,9 +11,7 @@
     "tabs",
     "notifications"
   ],
-  "host_permissions": [
-    "https://www.perplexity.ai/*"
-  ],
+  "host_permissions": ["<all_urls>", "http://localhost/*", "http://127.0.0.1/*"],
   "background": {
     "service_worker": "background.js"
   },

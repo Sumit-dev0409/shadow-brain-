@@ -9,13 +9,7 @@
     "scripting",
     "tabs"
   ],
-  "host_permissions": [
-    "https://chat.openai.com/*",
-    "https://chatgpt.com/*",
-    "https://claude.ai/*",
-    "https://chat.deepseek.com/*",
-    "https://www.perplexity.ai/*"
-  ],
+  "host_permissions": ["<all_urls>", "http://localhost/*", "http://127.0.0.1/*"],
   "background": {
     "service_worker": "background.js"
   },

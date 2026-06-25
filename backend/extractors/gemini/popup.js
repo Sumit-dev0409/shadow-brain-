@@ -186,8 +186,60 @@ document.getElementById('btnSaveUrl').addEventListener('click', async () => {
   showToast('Backend URL saved', 'success');
 });
 
+function setStatus(msg, color) {
+  const el = document.getElementById('backendStatus');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = color;
+  el.style.borderColor = color;
+}
+
+async function checkAndSyncBackend() {
+  const r = await chrome.runtime.sendMessage({ type: 'GET_BACKEND_URL' });
+  const backendUrl = r?.url || 'http://localhost:8000';
+  document.getElementById('backendUrl').value = backendUrl;
+
+  setStatus('⏳ Connecting to ' + backendUrl + '...', '#fbbf24');
+  console.log('[Brain Shadow] Testing backend at:', backendUrl);
+
+  try {
+    const res = await fetch(`${backendUrl}/health`);
+    if (!res.ok) {
+      setStatus('❌ Backend returned error ' + res.status, '#f87171');
+      console.error('[Brain Shadow] Health check failed:', res.status);
+      return;
+    }
+
+    setStatus('✅ Backend connected — syncing...', '#34d399');
+    console.log('[Brain Shadow] Backend connected!');
+
+    const all = await chrome.runtime.sendMessage({ type: 'GET_ALL_CONVERSATIONS' });
+    console.log('[Brain Shadow] Local conversations to sync:', (all || []).length);
+
+    let synced = 0;
+    for (const conv of (all || [])) {
+      try {
+        const resp = await fetch(`${backendUrl}/api/import/capture`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(conv)
+        });
+        if (resp.ok) synced++;
+        else console.warn('[Brain Shadow] Sync failed for', conv.title, resp.status);
+      } catch (err) {
+        console.error('[Brain Shadow] Sync error for', conv.title, err.message);
+      }
+    }
+
+    setStatus(`✅ Backend connected — ${synced} chats synced to MongoDB`, '#34d399');
+    if (synced > 0) showToast(`Synced ${synced} chats ✅`, 'success');
+
+  } catch (e) {
+    setStatus('❌ Backend offline: ' + e.message, '#f87171');
+    console.error('[Brain Shadow] Backend fetch failed:', e.message);
+  }
+}
+
 (async () => {
-  const result = await chrome.runtime.sendMessage({ type: 'GET_BACKEND_URL' });
-  document.getElementById('backendUrl').value = result?.url || 'http://localhost:8000';
-  await loadStats(); await loadRecentConversations();
+  await loadStats();
+  await loadRecentConversations();
+  await checkAndSyncBackend();
 })();

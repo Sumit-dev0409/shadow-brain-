@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // Brain Shadow — Background Service Worker (Gemini)
 // ============================================================
 
@@ -27,7 +27,7 @@ async function saveConversation(data, source = 'realtime') {
 
     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
     await updateMeta(conversations);
-    syncToBackend(data).catch(() => {});
+    // Sync handled by popup (MV3 service workers cannot fetch localhost)
 
     const tag = source === 'realtime' ? '🔴 Live' : '📦 Bulk';
     console.log(`[Brain Shadow] ${tag} saved: ${data.title} (${data.messages.length} msgs)`);
