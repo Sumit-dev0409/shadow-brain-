@@ -18,43 +18,48 @@ interface Node {
   orbitSpeed: number;
   orbitPhase: number;
   highlighted: boolean;
-  highlightColor: string; // actual platform color, overrides random category color
   pulsePhase: number;
-}
-
-/** Convert a hex color to rgba(...) string */
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 const COLORS = [
   "#f97316", // Claude AI — orange
   "#8b5cf6", // Copilot — purple
-  "#374151", // ChatGPT — dark grey
+  "#ffffff", // ChatGPT — white
   "#3b82f6", // Gemini — blue
+  "#facc15", // Grok — yellow
+  "#3ddc97", // DeepSeek — mint green
+  "#fb7185", // Perplexity — rose pink
+  "#b87333", // BackBox — copper
 ];
 
+const GLOW_COLORS = [
+  "rgba(249,115,22,",   // Claude AI — orange
+  "rgba(139,92,246,",   // Copilot — purple
+  "rgba(255,255,255,",  // ChatGPT — white
+  "rgba(59,130,246,",   // Gemini — blue
+  "rgba(250,204,21,",   // Grok — yellow
+  "rgba(61,220,151,",   // DeepSeek — mint green
+  "rgba(251,113,133,",  // Perplexity — rose pink
+  "rgba(184,115,51,",   // BackBox — copper
+];
 
 const NODE_COUNT = 1000;
 const CENTER_NODES = 8;
 
 interface ObsidianGraphProps {
   searchKeyword: string;
-  /** Map from node ID → platform hex color for nodes that have matching chat history */
-  highlightedNodes?: Map<number, string>;
+  /** Set of node IDs that should be highlighted (have actual chat history) */
+  highlightedNodeIds?: Set<number>;
   onNodeClick?: (nodeId: number, keyword: string) => void;
 }
 
-export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: ObsidianGraphProps) {
+export function ObsidianGraph({ searchKeyword, highlightedNodeIds, onNodeClick }: ObsidianGraphProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const nodesRef = useRef<Node[]>([]);
   const frameRef = useRef<number>(0);
   const timeRef = useRef<number>(0);
   const searchRef = useRef<string>("");
-  const highlightedNodesRef = useRef<Map<number, string>>(new Map());
+  const highlightedIdsRef = useRef<Set<number>>(new Set());
   const nodePositionsRef = useRef<Map<number, { x: number; y: number; radius: number }>>(new Map());
 
   const initNodes = useCallback((w: number, h: number) => {
@@ -63,7 +68,7 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
     const nodes: Node[] = [];
 
     for (let i = 0; i < NODE_COUNT; i++) {
-      const category = Math.floor(Math.random() * 4);
+      const category = Math.floor(Math.random() * COLORS.length);
       const orbitRadius = 30 + Math.random() * Math.min(w, h) * 0.42;
       const orbitPhase = Math.random() * Math.PI * 2;
       const rotAngle = Math.random() * Math.PI * 2;
@@ -85,7 +90,6 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
         orbitSpeed: (0.04 + Math.random() * 0.12) * (Math.random() > 0.5 ? 1 : -1) * 0.001,
         orbitPhase,
         highlighted: false,
-        highlightColor: "#4f8aff",
         pulsePhase: Math.random() * Math.PI * 2,
       });
     }
@@ -144,17 +148,15 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
       const nodes = nodesRef.current;
       const kw = searchRef.current.toLowerCase().trim();
       const hasSearch = kw.length > 1;
-      const hNodes = highlightedNodesRef.current;
+      const hIds = highlightedIdsRef.current;
 
       // Update positions
       const globalRot = t * 0.04;
       for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i];
 
-        // Set highlight state and the correct platform color
-        const platformColor = hNodes.get(node.id);
-        node.highlighted = hasSearch && platformColor !== undefined;
-        if (node.highlighted) node.highlightColor = platformColor!;
+        // Highlight only nodes that actually have matching chat history
+        node.highlighted = hasSearch && hIds.has(node.id);
 
         if (node.orbitRadius > 0) {
           node.orbitPhase += node.orbitSpeed * dt;
@@ -183,7 +185,7 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
           const isHighlighted = node.highlighted && target.highlighted;
 
           if (isHighlighted) {
-            ctx.strokeStyle = hexToRgba(node.highlightColor, 0.6);
+            ctx.strokeStyle = GLOW_COLORS[node.category] + "0.6)";
             ctx.lineWidth = 1.2;
           } else {
             ctx.strokeStyle = `rgba(99,130,255,${alpha})`;
@@ -209,40 +211,38 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
         ctx.save();
 
         if (node.highlighted) {
-          const hc = node.highlightColor;
-          // Glow ring using real platform color
+          // Glow ring
           const glowRadius = node.radius * 3.5;
           const glow = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, glowRadius);
-          glow.addColorStop(0, hexToRgba(hc, 0.9));
-          glow.addColorStop(0.5, hexToRgba(hc, 0.3));
-          glow.addColorStop(1, hexToRgba(hc, 0));
+          glow.addColorStop(0, GLOW_COLORS[node.category] + "0.9)");
+          glow.addColorStop(0.5, GLOW_COLORS[node.category] + "0.3)");
+          glow.addColorStop(1, GLOW_COLORS[node.category] + "0)");
           ctx.fillStyle = glow;
           ctx.beginPath();
           ctx.arc(node.x, node.y, glowRadius, 0, Math.PI * 2);
           ctx.fill();
 
           // Outer ring
-          ctx.strokeStyle = hexToRgba(hc, 0.8);
+          ctx.strokeStyle = GLOW_COLORS[node.category] + "0.8)";
           ctx.lineWidth = 1.5;
           ctx.beginPath();
           ctx.arc(node.x, node.y, node.radius * 2 + 2, 0, Math.PI * 2);
           ctx.stroke();
 
-          // Track for click detection — use full glow radius so the whole circle is clickable
+          // Track for click detection
           nodePositionsRef.current.set(node.id, {
             x: node.x,
             y: node.y,
-            radius: glowRadius + 4,
+            radius: node.radius * 1.4 + 4, // generous hit area
           });
         }
 
-        // Core dot — use platform color when highlighted
-        const dotColor = node.highlighted ? node.highlightColor : node.color;
+        // Core dot
         const baseAlpha = node.highlighted ? 1 : node.alpha * pulse;
         ctx.globalAlpha = baseAlpha;
-        ctx.fillStyle = dotColor;
+        ctx.fillStyle = node.color;
         ctx.shadowBlur = node.highlighted ? 12 : node.radius > 3 ? 6 : 3;
-        ctx.shadowColor = dotColor;
+        ctx.shadowColor = node.color;
         ctx.beginPath();
         ctx.arc(node.x, node.y, node.radius * (node.highlighted ? 1.4 : 1), 0, Math.PI * 2);
         ctx.fill();
@@ -276,51 +276,41 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
     searchRef.current = searchKeyword;
   }, [searchKeyword]);
 
-  // Sync highlighted nodes map
+  // Sync highlighted IDs
   useEffect(() => {
-    highlightedNodesRef.current = highlightedNodes ?? new Map();
-  }, [highlightedNodes]);
-
-  // Returns the nodeId under the mouse, or null
-  const hitTest = useCallback((e: React.MouseEvent<HTMLCanvasElement>): number | null => {
-    const canvas = canvasRef.current;
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    for (const [nodeId, nodePos] of nodePositionsRef.current.entries()) {
-      const dx = nodePos.x - x;
-      const dy = nodePos.y - y;
-      if (Math.sqrt(dx * dx + dy * dy) < nodePos.radius) return nodeId;
-    }
-    return null;
-  }, []);
-
-  // Pointer cursor only when hovering a highlighted node
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.style.cursor = hitTest(e) !== null ? "pointer" : "default";
-  }, [hitTest]);
+    highlightedIdsRef.current = highlightedNodeIds ?? new Set();
+  }, [highlightedNodeIds]);
 
   // Handle canvas click — only fires for highlighted nodes
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!onNodeClick) return;
+    const canvas = canvasRef.current;
+    if (!canvas || !onNodeClick) return;
     if (searchRef.current.trim().length < 2) return;
-    const nodeId = hitTest(e);
-    if (nodeId !== null) onNodeClick(nodeId, searchRef.current);
-  }, [onNodeClick, hitTest]);
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    for (const [nodeId, nodePos] of nodePositionsRef.current.entries()) {
+      const dx = nodePos.x - x;
+      const dy = nodePos.y - y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < nodePos.radius) {
+        onNodeClick(nodeId, searchRef.current);
+        return;
+      }
+    }
+  }, [onNodeClick]);
 
   return (
     <canvas
       ref={canvasRef}
       onClick={handleCanvasClick}
-      onMouseMove={handleMouseMove}
       style={{
         width: "100%",
         height: "100%",
         display: "block",
-        cursor: "default",
+        cursor: "pointer",
       }}
     />
   );

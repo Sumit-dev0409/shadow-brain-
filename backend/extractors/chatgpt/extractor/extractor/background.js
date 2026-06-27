@@ -41,7 +41,11 @@ async function saveConversation(data, source = 'realtime') {
 
     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
     await updateMeta(conversations);
-    // Sync handled by popup (MV3 service workers cannot fetch localhost)
+
+    // Sync to backend (fire and forget — local save already succeeded)
+    syncToBackend(data).catch(err => {
+      console.warn('[Brain Shadow] Backend sync failed (local save OK):', err.message);
+    });
 
     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴 Live' : '📦 Bulk'} saved: ${data.title} (${data.messages.length} msgs)`);
     return { status: 'saved', key };
@@ -157,6 +161,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'CLEAR_DATA') {
     clearAllData().then(sendResponse);
+    return true;
+  }
+
+  if (message.type === 'SYNC_ALL_TO_BACKEND') {
+    getAllConversations().then(async (convs) => {
+      let ok = 0, fail = 0;
+      for (const conv of convs) {
+        try { await syncToBackend(conv); ok++; }
+        catch { fail++; }
+      }
+      sendResponse({ status: 'done', synced: ok, failed: fail });
+    });
     return true;
   }
 

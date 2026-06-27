@@ -1,3 +1,0 @@
-module.exports=[33290,a=>{"use strict";var b=a.i(7997);a.s(["default",0,function({children:a}){return(0,b.jsxs)("html",{lang:"en",children:[(0,b.jsxs)("head",{children:[(0,b.jsx)("link",{rel:"preconnect",href:"https://fonts.googleapis.com"}),(0,b.jsx)("link",{rel:"preconnect",href:"https://fonts.gstatic.com",crossOrigin:"anonymous"}),(0,b.jsx)("link",{href:"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap",rel:"stylesheet"})]}),(0,b.jsx)("body",{style:{fontFamily:"'Inter', system-ui, sans-serif"},children:a})]})},"metadata",0,{title:"Shadow Brain — AI Memory Assistant",description:"Your AI memory that never forgets"}])},70864,a=>{a.n(a.i(33290))}];
-
-//# sourceMappingURL=app_layout_tsx_2144vk_._.js.map

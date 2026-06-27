@@ -7,7 +7,7 @@ dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const conversationService = require('../src/services/conversation.service');
 const enrichmentService = require('../src/services/enrichment.service');
-const openRouterService = require('../src/services/openrouter.service');
+const groqService = require('../src/services/groq.service');
 const Conversation = require('../src/models/conversation.model');
 
 async function runTest() {
@@ -23,10 +23,10 @@ async function runTest() {
     await Conversation.deleteOne({ externalId: testExternalId });
     console.log('✔ Cleaned up test data');
 
-    // 3. Mock OpenRouter response to avoid API calls
-    const originalExtractMetadata = openRouterService.extractMetadata;
-    openRouterService.extractMetadata = async () => {
-      console.log('   (Mocking OpenRouter API Call)');
+    // 3. Mock Groq response to avoid API calls
+    const originalExtractMetadata = groqService.extractMetadata;
+    groqService.extractMetadata = async () => {
+      console.log('   (Mocking Groq API Call)');
       return {
         content: JSON.stringify({
           topic: "Test Automation Flow",
@@ -100,7 +100,7 @@ async function runTest() {
     console.log(`✔ Safety check passed. Status remains: ${finalCheck.status}`);
 
     // Restore mock and cleanup
-    openRouterService.extractMetadata = originalExtractMetadata;
+    groqService.extractMetadata = originalExtractMetadata;
     await Conversation.deleteOne({ externalId: testExternalId });
     await mongoose.disconnect();
     

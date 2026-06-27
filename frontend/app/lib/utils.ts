@@ -168,50 +168,47 @@ export function getMemoryGraph(text: string): MemoryGraphData | undefined {
   return MEMORY_GRAPHS[classifyIntent(text)];
 }
 
-export function makeInitialSessions(): ChatSession[] {
-  const now = Date.now();
-  return [
-    {
-      id: "s1",
-      title: "Project deadline reminders",
-      messages: [],
-      createdAt: new Date(now),
-      lastMessageAt: new Date(now),
-    },
-    {
-      id: "s2",
-      title: "Workout routine planning",
-      messages: [],
-      createdAt: new Date(now - 86400000),
-      lastMessageAt: new Date(now - 86400000),
-    },
-    {
-      id: "s3",
-      title: "Book recommendations list",
-      messages: [],
-      createdAt: new Date(now - 86400000 * 2),
-      lastMessageAt: new Date(now - 86400000 * 2),
-    },
-    {
-      id: "s4",
-      title: "Meeting notes — Q3 review",
-      messages: [],
-      createdAt: new Date(now - 86400000 * 3),
-      lastMessageAt: new Date(now - 86400000 * 3),
-    },
-    {
-      id: "s5",
-      title: "Travel itinerary for Japan",
-      messages: [],
-      createdAt: new Date(now - 86400000 * 5),
-      lastMessageAt: new Date(now - 86400000 * 5),
-    },
-    {
-      id: "s6",
-      title: "Recipe ideas for the week",
-      messages: [],
-      createdAt: new Date(now - 86400000 * 7),
-      lastMessageAt: new Date(now - 86400000 * 7),
-    },
-  ];
-}
+export const INITIAL_SESSIONS: ChatSession[] = [
+  {
+    id: "s1",
+    title: "Project deadline reminders",
+    messages: [],
+    createdAt: new Date(),
+    lastMessageAt: new Date(),
+  },
+  {
+    id: "s2",
+    title: "Workout routine planning",
+    messages: [],
+    createdAt: new Date(Date.now() - 86400000),
+    lastMessageAt: new Date(Date.now() - 86400000),
+  },
+  {
+    id: "s3",
+    title: "Book recommendations list",
+    messages: [],
+    createdAt: new Date(Date.now() - 86400000 * 2),
+    lastMessageAt: new Date(Date.now() - 86400000 * 2),
+  },
+  {
+    id: "s4",
+    title: "Meeting notes — Q3 review",
+    messages: [],
+    createdAt: new Date(Date.now() - 86400000 * 3),
+    lastMessageAt: new Date(Date.now() - 86400000 * 3),
+  },
+  {
+    id: "s5",
+    title: "Travel itinerary for Japan",
+    messages: [],
+    createdAt: new Date(Date.now() - 86400000 * 5),
+    lastMessageAt: new Date(Date.now() - 86400000 * 5),
+  },
+  {
+    id: "s6",
+    title: "Recipe ideas for the week",
+    messages: [],
+    createdAt: new Date(Date.now() - 86400000 * 7),
+    lastMessageAt: new Date(Date.now() - 86400000 * 7),
+  },
+];

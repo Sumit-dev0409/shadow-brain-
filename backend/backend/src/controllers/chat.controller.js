@@ -1,4 +1,4 @@
-const openRouterService = require('../services/openrouter.service');
+const groqService = require('../services/groq.service');
 const logger            = require('../utils/logger');
 
 const chat = async (req, res, next) => {
@@ -9,7 +9,7 @@ const chat = async (req, res, next) => {
       return res.status(400).json({ error: 'messages array is required' });
     }
 
-    const result = await openRouterService.chat(messages, systemPrompt);
+    const result = await groqService.chat(messages, systemPrompt);
     res.json({ content: result.content, usage: result.usage });
   } catch (err) {
     logger.error(`[Chat] ${err.message}`);

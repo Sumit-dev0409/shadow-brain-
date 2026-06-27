@@ -222,13 +222,19 @@ async function saveConversation(data, source = 'realtime') {
     if (source === 'bulk' && existing && existing.messages.length >= data.messages.length)
       return { status: 'skipped', reason: 'no_change' };
 
-    // Sync is handled by popup (MV3 service workers cannot fetch localhost)
     conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source, synced: false };
     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
     await updateMeta(conversations);
 
-    console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴' : '📦'} saved locally: ${data.title}`);
-    return { status: 'saved', key, synced: false };
+    // Sync to backend immediately (fire and forget — local save already succeeded)
+    const syncResult = await syncToBackend(data);
+    if (syncResult.ok) {
+      conversations[key].synced = true;
+      await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+    }
+
+    console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴' : '📦'} saved: ${data.title} | synced: ${syncResult.ok}`);
+    return { status: 'saved', key, synced: syncResult.ok };
   } catch (err) {
     return { status: 'error', error: err.message };
   }

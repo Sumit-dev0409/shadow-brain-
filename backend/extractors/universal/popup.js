@@ -18,7 +18,7 @@ const PLATFORM_BASE_URLS = {
   'chat.deepseek.com':     { platform: 'deepseek',   baseUrl: 'https://chat.deepseek.com'      },
   'copilot.microsoft.com': { platform: 'copilot',    baseUrl: 'https://copilot.microsoft.com'  },
   'github.com':            { platform: 'copilot',    baseUrl: 'https://github.com/copilot'     },
-  'www.perplexity.ai':     { platform: 'perplexity', baseUrl: 'https://www.perplexity.ai'      },
+  'www.perplexity.ai':     { platform: 'perplexity', baseUrl: 'https://www.perplexity.ai/library' },
   'grok.com':              { platform: 'grok',       baseUrl: 'https://grok.com'               },
   'x.com':                 { platform: 'grok',       baseUrl: 'https://grok.com'               },
 };
@@ -62,8 +62,11 @@ async function testBackend(url) {
 async function syncAllToBackend(backendUrl) {
   const convs = await chrome.runtime.sendMessage({ type: 'GET_ALL_CONVERSATIONS' });
   if (!convs?.length) return;
+  // Only sync conversations that haven't been synced yet
+  const unsynced = convs.filter(c => !c.synced);
+  if (!unsynced.length) return;
   let synced = 0;
-  for (const conv of convs) {
+  for (const conv of unsynced) {
     try {
       const res = await fetch(`${backendUrl}/api/import/capture`, {
         method: 'POST',

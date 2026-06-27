@@ -110,13 +110,60 @@ function githubCopilotConfig() {
 
 function perplexityConfig() {
   return {
-    platform:   'perplexity',
-    convUrlRe:  /\/(?:search|page|c)\/([a-zA-Z0-9_\-]{4,})/,
-    userSel:    ['[class*="UserQuery"]', '[class*="userQuery"]', '[class*="queryText"]', '[data-testid*="user"]'],
-    asstSel:    ['[class*="AnswerBody"]', '[class*="answerBody"]', '[class*="prose"]', '[data-testid*="answer"]'],
-    streaming:  ['button[aria-label*="Stop" i]', '[class*="stopButton"]', '[class*="skeleton"]'],
-    extractId:  url => { const m = new URL(url).pathname.match(/\/(?:search|page|c)\/([\w\-]+)/); return m?.[1] || url; },
-    titleClean: t => t.replace(' - Perplexity', '').replace(' | Perplexity', ''),
+    platform:  'perplexity',
+    convUrlRe: /\/(?:search|page|c)\/([a-zA-Z0-9_\-]{4,})/,
+    userSel:   [],
+    asstSel:   [],
+    streaming: ['button[aria-label*="Stop" i]', '[class*="skeleton"]', '[class*="animate-pulse"]'],
+    extractId: url => {
+      try { const m = new URL(url).pathname.match(/\/(?:search|page|c)\/([\w\-]+)/); return m?.[1] || url; }
+      catch { return url; }
+    },
+    titleClean: t => t.replace(/ [-|] Perplexity.*$/, '').trim(),
+
+    // Custom extractor — Perplexity is a search engine, not a chat.
+    extractCustom() {
+      // ── User query: from URL slug (always works) ───────────
+      const slug  = location.pathname.split('/').filter(Boolean).pop() || '';
+      const query = slug.replace(/-[A-Za-z0-9]{6,}$/, '').replace(/-/g, ' ').trim()
+        || document.title.replace(/ [-|] Perplexity.*$/i, '').trim()
+        || 'Search query';
+
+      // ── Answer: try specific selectors, then grab biggest
+      //    text block on the whole page — guaranteed to work ──
+      const SKIP = new Set(['SCRIPT','STYLE','NAV','HEADER','FOOTER','ASIDE']);
+
+      // Try specific selectors first
+      const specific = ['.prose','[class*="prose"]','[class*="AnswerBody"]',
+        '[class*="answer"]','[class*="markdown"]','[class*="content"]','article','main section'];
+      let answerText = '';
+      for (const sel of specific) {
+        const best = [...document.querySelectorAll(sel)]
+          .filter(el => {
+            let p = el; while (p) { if (SKIP.has(p.tagName)) return false; p = p.parentElement; }
+            return true;
+          })
+          .map(el => el.innerText?.trim() || '')
+          .filter(t => t.length > 80)
+          .sort((a, b) => b.length - a.length)[0];
+        if (best) { answerText = best; break; }
+      }
+
+      // Fallback: biggest div/section anywhere on page
+      if (!answerText) {
+        const all = [...document.querySelectorAll('div,section,article,p')]
+          .filter(el => {
+            let p = el; while (p) { if (SKIP.has(p.tagName)) return false; p = p.parentElement; }
+            const t = el.innerText?.trim() || '';
+            return t.length > 100 && el.children.length < 30;
+          });
+        all.sort((a, b) => (b.innerText?.length || 0) - (a.innerText?.length || 0));
+        answerText = all[0]?.innerText?.trim() || '';
+      }
+
+      if (!answerText) return null;
+      return { userMsg: query, asstMsg: answerText.slice(0, 5000) };
+    },
   };
 }
 
@@ -190,6 +237,22 @@ function init() {
     });
   }
 
+  // ── Platform custom extractor (e.g. Perplexity) ─────────
+  function scrapeCustom() {
+    if (!config.extractCustom) return null;
+    const result = config.extractCustom();
+    if (!result) return null;
+    const { userMsg, asstMsg } = result;
+    const messages = assignRelativeTimestamps([
+      { role: 'user',      content: userMsg },
+      { role: 'assistant', content: asstMsg },
+    ]);
+    const external_id = config.extractId ? config.extractId(location.href) : location.href;
+    const rawTitle    = document.title || '';
+    const title       = (config.titleClean ? config.titleClean(rawTitle) : rawTitle).trim() || external_id;
+    return { platform: config.platform, external_id, url: location.href, title, message_count: messages.length, messages, captured_at: new Date().toISOString() };
+  }
+
   // ── Message extraction ───────────────────────────────────
   function deduplicateConsecutiveRoles(messages) {
     if (!messages.length) return messages;
@@ -255,7 +318,7 @@ function init() {
     try {
       await waitForStreamingToFinish();
       if (scroll) await scrollToLoadAllMessages();
-      const conversation = scrapeConversation();
+      const conversation = scrapeCustom() || scrapeConversation();
       if (!conversation) return { status: 'empty' };
       const result = await new Promise((resolve) => {
         chrome.runtime.sendMessage({ type: 'SAVE_CONVERSATION', payload: conversation },
@@ -334,7 +397,7 @@ function init() {
               const id    = item.id || item.sessionId || item.chatId;
               const title = item.title || item.name || `DeepSeek chat`;
               if (!id || !/^[a-zA-Z0-9_\-]{8,}$/.test(id)) continue;
-              if (!seen.has(id)) { seen.add(id); threads.push({ url: `${location.origin}/a/chat/s/${id}`, title: String(title).slice(0, 120) }); }
+              if (!seen.has(id)) { seen.add(id); threads.push({ url: `${location.origin}/chat/s/${id}`, title: String(title).slice(0, 120) }); }
             }
           }
         }

@@ -34,4 +34,12 @@ export interface ChatSession {
   messages: Message[];
   createdAt: Date;
   lastMessageAt: Date;
+  // Fields populated from backend enrichment
+  platform?: string;
+  topic?: string;
+  category?: string;
+  keywords?: string[];
+  summary?: string;
+  importanceScore?: number;
+  url?: string;
 }

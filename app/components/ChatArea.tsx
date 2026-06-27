@@ -17,6 +17,7 @@ interface ChatAreaProps {
   onExplore?: (label: string) => void;
   onClear: () => void;
   onMenuClick: () => void;
+  onGraphView?: () => void;
 }
 
 export function ChatArea({
@@ -27,6 +28,7 @@ export function ChatArea({
   onExplore,
   onClear,
   onMenuClick,
+  onGraphView,
 }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -36,7 +38,7 @@ export function ChatArea({
 
   return (
     <div className="flex flex-col h-screen flex-1 min-w-0" style={{ background: "var(--bg-deep)" }}>
-      <TopBar onMenuClick={onMenuClick} onClear={onClear} />
+      <TopBar onMenuClick={onMenuClick} onClear={onClear} onGraphView={onGraphView} />
 
       <div className="flex-1 overflow-y-auto">
         {messages.length === 0 && !isTyping ? (

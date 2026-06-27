@@ -289,6 +289,22 @@ document.getElementById('btnClear').addEventListener('click', async () => {
   showToast('All data cleared');
 });
 
+// ── Sync All to Backend ────────────────────────────────────
+document.getElementById('btnSyncBackend').addEventListener('click', async () => {
+  const btn = document.getElementById('btnSyncBackend');
+  btn.disabled = true;
+  btn.textContent = '⏳ Syncing...';
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'SYNC_ALL_TO_BACKEND' });
+    showToast(`Synced ${result.synced} conversations${result.failed ? `, ${result.failed} failed` : ''}`, result.failed ? 'error' : 'success');
+  } catch (e) {
+    showToast('Sync failed — is backend running?', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '☁️ Sync All to Backend';
+  }
+});
+
 // ── Save Backend URL ───────────────────────────────────────
 document.getElementById('btnSaveUrl').addEventListener('click', async () => {
   const url = document.getElementById('backendUrl').value.trim();

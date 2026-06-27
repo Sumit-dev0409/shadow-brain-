@@ -1,14 +1,15 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Menu, RotateCcw, MoreHorizontal } from "lucide-react";
+import { Menu, RotateCcw, MoreHorizontal, Network } from "lucide-react";
 
 interface TopBarProps {
   onMenuClick: () => void;
   onClear: () => void;
+  onGraphView?: () => void;
 }
 
-export function TopBar({ onMenuClick, onClear }: TopBarProps) {
+export function TopBar({ onMenuClick, onClear, onGraphView }: TopBarProps) {
   return (
     <div
       className="flex items-center justify-between px-5 py-3.5 flex-shrink-0"
@@ -46,6 +47,23 @@ export function TopBar({ onMenuClick, onClear }: TopBarProps) {
       </div>
 
       <div className="flex items-center gap-2">
+        {onGraphView && (
+          <motion.button
+            onClick={onGraphView}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium"
+            style={{
+              border: "1px solid var(--border-glow)",
+              color: "var(--blue)",
+              background: "rgba(79,138,255,0.08)",
+            }}
+            whileHover={{ background: "rgba(79,138,255,0.18)" }}
+            whileTap={{ scale: 0.97 }}
+          >
+            <Network size={12} />
+            <span className="hidden sm:inline">Brain Graph</span>
+          </motion.button>
+        )}
+
         <motion.button
           onClick={onClear}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium"

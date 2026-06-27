@@ -7,6 +7,29 @@ import { Logo } from "./Logo";
 import { ChatSession } from "@/app/types";
 import { formatTime } from "@/app/lib/utils";
 
+const PLATFORM_META: Record<string, { label: string; color: string }> = {
+  chatgpt:    { label: "ChatGPT",    color: "#10a37f" },
+  claude:     { label: "Claude",     color: "#f97316" },
+  gemini:     { label: "Gemini",     color: "#3b82f6" },
+  copilot:    { label: "Copilot",    color: "#8b5cf6" },
+  mscopilot:  { label: "Copilot",    color: "#8b5cf6" },
+  perplexity: { label: "Perplexity", color: "#14b8a6" },
+  grok:       { label: "Grok",       color: "#ef4444" },
+  deepseek:   { label: "DeepSeek",   color: "#06b6d4" },
+  blackbox:   { label: "Blackbox",   color: "#22c55e" },
+};
+
+function PlatformDot({ platform }: { platform?: string }) {
+  const meta = platform ? PLATFORM_META[platform] : null;
+  if (!meta) return <MessageSquare size={13} style={{ color: "var(--text-muted)", flexShrink: 0 }} />;
+  return (
+    <span
+      className="w-2 h-2 rounded-full flex-shrink-0 mt-0.5"
+      style={{ background: meta.color, boxShadow: `0 0 5px ${meta.color}88`, minWidth: 8 }}
+    />
+  );
+}
+
 interface SidebarProps {
   sessions: ChatSession[];
   activeId: string;
@@ -91,6 +114,12 @@ export function Sidebar({
         </p>
 
         <div className="flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: "calc(100vh - 280px)" }}>
+          {sessions.length === 0 && (
+            <p className="text-[11px] px-2 py-3 text-center" style={{ color: "var(--text-muted)" }}>
+              No conversations yet.
+              <br />Start a new chat above.
+            </p>
+          )}
           {sessions.map((session) => (
             <motion.button
               key={session.id}
@@ -114,22 +143,51 @@ export function Sidebar({
                   }}
                 />
               )}
-              <div className="flex items-center gap-2.5">
-                <MessageSquare
-                  size={13}
-                  style={{ color: session.id === activeId ? "var(--blue)" : "var(--text-muted)", flexShrink: 0 }}
-                />
-                <div className="min-w-0">
+              <div className="flex items-start gap-2.5 w-full min-w-0">
+                <PlatformDot platform={session.platform} />
+                <div className="min-w-0 flex-1">
                   <p
                     className="text-[12.5px] truncate leading-tight"
                     style={{ color: session.id === activeId ? "var(--text-primary)" : "var(--text-secondary)" }}
                   >
                     {session.title}
                   </p>
-                  <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>
-                    {formatTime(session.lastMessageAt)}
-                  </p>
+                  {session.topic && session.topic !== session.title && (
+                    <p className="text-[10px] truncate mt-0.5" style={{ color: "var(--blue)", opacity: 0.8 }}>
+                      {session.topic}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    {session.platform && PLATFORM_META[session.platform] && (
+                      <span
+                        className="text-[9px] font-semibold px-1.5 py-0.5 rounded"
+                        style={{
+                          background: `${PLATFORM_META[session.platform].color}18`,
+                          color: PLATFORM_META[session.platform].color,
+                          border: `1px solid ${PLATFORM_META[session.platform].color}33`,
+                        }}
+                      >
+                        {PLATFORM_META[session.platform].label}
+                      </span>
+                    )}
+                    {session.category && (
+                      <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>
+                        {session.category}
+                      </span>
+                    )}
+                    <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>
+                      {formatTime(session.lastMessageAt)}
+                    </span>
+                  </div>
                 </div>
+                {session.importanceScore !== undefined && session.importanceScore >= 4 && (
+                  <span
+                    className="text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0"
+                    style={{ background: "rgba(251,191,36,0.12)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.25)" }}
+                  >
+                    ★{session.importanceScore}
+                  </span>
+                )}
               </div>
             </motion.button>
           ))}

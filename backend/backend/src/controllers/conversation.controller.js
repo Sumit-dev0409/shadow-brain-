@@ -13,7 +13,7 @@ const createConversation = async (req, res, next) => {
     }
 
     const conversation = await conversationService.createOrUpdate(req.body);
-    logger.info(`DEBUG: [CONTROLLER] Conversation processed: ${conversation._id}`);
+    logger.info(`[CAPTURE] ${conversation.platform} | "${conversation.title?.slice(0,50)}" | ${conversation.messages?.length} msgs | status: ${conversation.status}`);
     
     // Trigger enrichment immediately (no queue)
     setImmediate(() => {
