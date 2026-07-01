@@ -49,7 +49,7 @@ const messageSchema = new Schema({
 
 const conversationSchema = new Schema<IConversation>(
   {
-    externalId: { type: String, required: true, unique: true, index: true },
+    externalId: { type: String, required: true, index: true },
     platform: {
       type: String,
       required: true,
@@ -89,6 +89,8 @@ const conversationSchema = new Schema<IConversation>(
   },
   { timestamps: true }
 );
+
+conversationSchema.index({ platform: 1, externalId: 1 }, { unique: true });
 
 export const Conversation: Model<IConversation> =
   (mongoose.models.Conversation as Model<IConversation>) ||

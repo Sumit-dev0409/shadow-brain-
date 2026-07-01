@@ -15,10 +15,12 @@ const PLATFORM_BASE_URLS = {
   'claude.ai':             { platform: 'claude',     baseUrl: 'https://claude.ai/recents'      },
   'gemini.google.com':     { platform: 'gemini',     baseUrl: 'https://gemini.google.com/app'  },
   'www.blackbox.ai':       { platform: 'blackbox',   baseUrl: 'https://www.blackbox.ai'        },
+  'blackbox.ai':           { platform: 'blackbox',   baseUrl: 'https://www.blackbox.ai'        },
   'chat.deepseek.com':     { platform: 'deepseek',   baseUrl: 'https://chat.deepseek.com'      },
   'copilot.microsoft.com': { platform: 'copilot',    baseUrl: 'https://copilot.microsoft.com'  },
   'github.com':            { platform: 'copilot',    baseUrl: 'https://github.com/copilot'     },
   'www.perplexity.ai':     { platform: 'perplexity', baseUrl: 'https://www.perplexity.ai/library' },
+  'perplexity.ai':         { platform: 'perplexity', baseUrl: 'https://www.perplexity.ai/library' },
   'grok.com':              { platform: 'grok',       baseUrl: 'https://grok.com'               },
   'x.com':                 { platform: 'grok',       baseUrl: 'https://grok.com'               },
 };

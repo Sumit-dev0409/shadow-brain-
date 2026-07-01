@@ -12,4 +12,6 @@ export const AI_AGENTS: AgentOption[] = [
   { id: "perplexity", name: "Perplexity", description: "Search-augmented answers", accent: "#20808d" },
   { id: "grok", name: "Grok", description: "xAI's Grok models", accent: "#8b5cf6" },
   { id: "copilot", name: "Copilot", description: "Microsoft's Copilot", accent: "#00a4ef" },
+  { id: "deepseek", name: "DeepSeek", description: "DeepSeek's chat models", accent: "#06b6d4" },
+  { id: "blackbox", name: "Blackbox", description: "AI coding assistant", accent: "#22c55e" },
 ];

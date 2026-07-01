@@ -19,8 +19,8 @@ interface RightPanelProps {
   onForgetPast: () => void;
 }
 
-const CATEGORY_LABELS = ["Claude AI", "Copilot", "ChatGPT", "Gemini"];
-const CATEGORY_COLORS = ["#f97316", "#8b5cf6", "#374151", "#3b82f6"];
+const CATEGORY_LABELS = ["ChatGPT", "Claude AI", "Gemini", "Copilot", "Perplexity", "Grok", "DeepSeek", "Blackbox"];
+const CATEGORY_COLORS = ["#10a37f", "#f97316", "#3b82f6", "#8b5cf6", "#14b8a6", "#ef4444", "#06b6d4", "#22c55e"];
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
@@ -42,7 +42,7 @@ function ordinal(n: number): string {
 function categoryForKeyword(kw: string): number {
   let hash = 0;
   for (let i = 0; i < kw.length; i++) hash = (hash * 31 + kw.charCodeAt(i)) & 0xffff;
-  return hash % 4;
+  return hash % CATEGORY_LABELS.length;
 }
 
 export function RightPanel({
@@ -132,7 +132,6 @@ export function RightPanel({
           </div>
         </div>
 
-        {/* Forget Past button */}
         {searchHistory.length > 0 && !showConfirm && (
           <motion.button
             onClick={() => setShowConfirm(true)}
@@ -150,7 +149,6 @@ export function RightPanel({
           </motion.button>
         )}
 
-        {/* Confirmation inline */}
         {showConfirm && (
           <motion.div
             initial={{ opacity: 0, scale: 0.92 }}
@@ -182,7 +180,6 @@ export function RightPanel({
       <div className="flex-1 overflow-y-auto p-3">
         <AnimatePresence mode="popLayout">
 
-          {/* Node detail popup */}
           {showMsg && selectedRecord && (
             <motion.div
               key="detail-msg"
@@ -226,7 +223,6 @@ export function RightPanel({
             </motion.div>
           )}
 
-          {/* Recommendations list */}
           {recommendations.length > 0 && (
             <motion.div key="recs" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
               <div className="flex items-center gap-1.5 mb-2 px-1">
@@ -292,7 +288,6 @@ export function RightPanel({
             </motion.div>
           )}
 
-          {/* Empty state */}
           {recommendations.length === 0 && (
             <motion.div
               key="empty"

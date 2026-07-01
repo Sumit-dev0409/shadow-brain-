@@ -16,10 +16,12 @@ const PLATFORM_CONFIGS = {
   'claude.ai':         claudeConfig(),
   'gemini.google.com': geminiConfig(),
   'www.blackbox.ai':   blackboxConfig(),
+  'blackbox.ai':       blackboxConfig(),
   'chat.deepseek.com': deepseekConfig(),
   'copilot.microsoft.com': mscopilotConfig(),
   'github.com':        githubCopilotConfig(),
   'www.perplexity.ai': perplexityConfig(),
+  'perplexity.ai':     perplexityConfig(),
   'grok.com':          grokConfig(),
   'x.com':             grokConfig(),
 };
