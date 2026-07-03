@@ -63,22 +63,33 @@ export async function fetchConversations(): Promise<ApiConversation[]> {
 
 export interface MemorySource {
   id: string;
+  convId?: string;
   title: string;
   platform: string;
+  date?: string | null;
+  role?: string;
+  snippet?: string;
   summary?: string | null;
+  keywords?: string[];
 }
 
-export async function searchMemory(query: string): Promise<{ answer: string; sources: MemorySource[] }> {
+export async function searchMemory(query: string, platforms?: string[]): Promise<{ answer: string; sources: MemorySource[] }> {
   try {
     const res = await fetch(`${API_BASE}/api/conversations/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, platforms: platforms && platforms.length > 0 ? platforms : undefined }),
     });
     if (!res.ok) throw new Error(`Search error ${res.status}`);
     return res.json();
-  } catch {
-    return { answer: 'Could not reach the backend. Make sure it is running on port 8000.', sources: [] };
+  } catch (e) {
+    const isNetworkError = e instanceof TypeError;
+    return {
+      answer: isNetworkError
+        ? 'Could not reach the backend. Make sure it is running on port 8000.'
+        : `Search failed: ${(e as Error).message}`,
+      sources: [],
+    };
   }
 }
 

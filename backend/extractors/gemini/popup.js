@@ -151,6 +151,7 @@ document.getElementById('btnBulkImport').addEventListener('click', async () => {
     showToast(`Done! ${savedCount} chats saved`, 'success');
     loadStats(); loadRecentConversations();
     setTimeout(hideProgress, 4000);
+    checkAndSyncBackend();
   });
 });
 

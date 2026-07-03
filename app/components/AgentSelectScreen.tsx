@@ -56,7 +56,7 @@ export function AgentSelectScreen({ initialSelected = [], onContinue }: AgentSel
           Which AI agents should Shadow Brain remember for?
         </h1>
         <p className="text-center text-[12.5px] mt-1.5 mb-5" style={{ color: "var(--text-secondary)" }}>
-          Pick one to start with ChatGPT only, or select several. You can change this anytime from the sidebar.
+          Choose any platforms you use, or select them all. You can change this anytime from the sidebar.
         </p>
 
         <div className="flex justify-end mb-2">

@@ -57,8 +57,7 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, nodeDates, onNo
   const timeRef = useRef<number>(0);
   const searchRef = useRef<string>("");
   const highlightedNodesRef = useRef<Map<number, string>>(new Map());
-  const nodeDatesRef = useRef<Map<number, string>>(new Map());
-  const nodePositionsRef = useRef<Map<number, { x: number; y: number; radius: number }>>(new Map());
+const nodePositionsRef = useRef<Map<number, { x: number; y: number; radius: number }>>(new Map());
   const initSizeRef = useRef<{ w: number; h: number }>({ w: 1, h: 1 });
 
   const initNodes = useCallback((w: number, h: number) => {
@@ -243,11 +242,11 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, nodeDates, onNo
           ctx.arc(node.x, node.y, node.radius * 2 + 2, 0, Math.PI * 2);
           ctx.stroke();
 
-          // Track for click detection — use full glow radius so the whole circle is clickable
+          // Track for click detection — minimum 18px so small nodes are easy to tap
           nodePositionsRef.current.set(node.id, {
             x: node.x,
             y: node.y,
-            radius: glowRadius + 4,
+            radius: Math.max(glowRadius + 4, 18),
           });
         }
 
@@ -331,12 +330,7 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, nodeDates, onNo
     highlightedNodesRef.current = highlightedNodes ?? new Map();
   }, [highlightedNodes]);
 
-  // Sync date labels map
-  useEffect(() => {
-    nodeDatesRef.current = nodeDates ?? new Map();
-  }, [nodeDates]);
-
-  // Returns the nodeId under the mouse, or null
+// Returns the nodeId under the mouse, or null
   const hitTest = useCallback((e: React.MouseEvent<HTMLCanvasElement>): number | null => {
     const canvas = canvasRef.current;
     if (!canvas) return null;

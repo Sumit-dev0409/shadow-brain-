@@ -5,7 +5,6 @@ const conversationSchema = new mongoose.Schema(
     externalId: {
       type: String,
       required: true,
-      unique: true,
       index: true,
     },
     platform: {
@@ -65,5 +64,9 @@ const conversationSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+// IDs only need to be unique inside their source platform. The same opaque ID
+// may legitimately be produced by two different providers.
+conversationSchema.index({ platform: 1, externalId: 1 }, { unique: true });
 
 module.exports = mongoose.model('Conversation', conversationSchema);

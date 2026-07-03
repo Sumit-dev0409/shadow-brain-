@@ -2,16 +2,19 @@
 
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { MessageSquare, Clock, Sparkles, Loader2 } from "lucide-react";
+import { MessageSquare, Clock, Sparkles, Loader2, X } from "lucide-react";
 import { ObsidianGraph } from "./ObsidianGraph";
 import { ChatSession, Message } from "@/app/types";
 import { searchMemory, MemorySource } from "@/app/lib/api";
 
 interface GraphCenterProps {
   searchKeyword: string;
+  onAiSourcesChange?: (sources: MemorySource[]) => void;
+  onAiAnswerReady?: (keyword: string, answer: string) => void;
+  panelResetKey?: number;
   sessions?: ChatSession[];
   sessionsLoading?: boolean;
-  onSessionSelect?: (id: string) => void;
+  selectedAgents?: string[];
 }
 
 const PLATFORM_COLORS: Record<string, string> = {
@@ -61,9 +64,6 @@ function fmtDate(date: Date): string {
 }
 
 /** Short label shown on the canvas node e.g. "Jun 18" */
-function fmtNodeDate(date: Date): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(date);
-}
 
 /**
  * Deterministically map a session to a node ID so the same session
@@ -148,10 +148,16 @@ function wordScore(text: string, word: string, stemmedWord: string, synonyms: st
 
 // ────────────────────────────────────────────────────────────────────────────
 
-export function GraphCenter({ searchKeyword, sessions = [], sessionsLoading = false, onSessionSelect }: GraphCenterProps) {
+export function GraphCenter({ searchKeyword, onAiSourcesChange, onAiAnswerReady, panelResetKey, sessions = [], sessionsLoading = false, selectedAgents = [] }: GraphCenterProps) {
   // null = auto mode (show all matches); set to a nodeId when user clicks a specific node
   const [pinnedNodeId, setPinnedNodeId] = useState<number | null>(null);
   const [clickedSessions, setClickedSessions] = useState<ChatSession[]>([]);
+  const [panelDismissed, setPanelDismissed] = useState(false);
+
+  // Force-open panel when a history item is clicked (even if same keyword)
+  useEffect(() => {
+    if (panelResetKey) setPanelDismissed(false);
+  }, [panelResetKey]);
 
   // AI answer from backend memory search
   const [aiAnswer, setAiAnswer] = useState<string>("");
@@ -269,27 +275,26 @@ export function GraphCenter({ searchKeyword, sessions = [], sessionsLoading = fa
       setClickedSessions([]);
       setAiAnswer("");
       setAiSources([]);
+      onAiSourcesChange?.([]);
       setAiLoading(false);
       if (aiDebounce.current) clearTimeout(aiDebounce.current);
-      // Reset panel open state when search cleared so it re-opens on next search
-      setPanelOpen(true);
       return;
     }
-
-    // Ensure the panel is open when a search becomes active
-    setPanelOpen(true);
 
     // Debounce AI search — fire 800ms after user stops typing
     if (aiDebounce.current) clearTimeout(aiDebounce.current);
     aiDebounce.current = setTimeout(async () => {
       setAiLoading(true);
       try {
-        const result = await searchMemory(searchKeyword.trim());
+        const result = await searchMemory(searchKeyword.trim(), selectedAgents);
         setAiAnswer(result.answer);
         setAiSources(result.sources);
+        onAiSourcesChange?.(result.sources);
+        onAiAnswerReady?.(searchKeyword.trim().toLowerCase(), result.answer);
       } catch {
         setAiAnswer("");
         setAiSources([]);
+        onAiSourcesChange?.([]);
       } finally {
         setAiLoading(false);
       }
@@ -301,15 +306,13 @@ export function GraphCenter({ searchKeyword, sessions = [], sessionsLoading = fa
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kw]);
 
-  // Clicking a node: pin to that node's sessions and open the selected conversation
+  // Clicking a node: pin to that node's sessions
   const handleNodeClick = useCallback((nodeId: number, _keyword: string) => {
     const found = nodeSessionsMapRef.current.get(nodeId) ?? [];
     setClickedSessions(found);
     setPinnedNodeId(nodeId);
-    if (found.length > 0 && onSessionSelect) {
-      onSessionSelect(found[0].id);
-    }
-  }, [onSessionSelect]);
+    setPanelDismissed(false);
+  }, []);
 
   // Unpin — go back to showing all matches
   const handleUnpin = useCallback(() => {
@@ -317,12 +320,21 @@ export function GraphCenter({ searchKeyword, sessions = [], sessionsLoading = fa
     setClickedSessions([]);
   }, []);
 
+  const prevKw = useRef(kw);
+  if (prevKw.current !== kw) { prevKw.current = kw; if (panelDismissed) setPanelDismissed(false); }
+
   // Panel is visible whenever a search is active (AI answer or local matches)
-  // Use local panelOpen state so the popup can be closed without mutating parent props
-  const [panelOpen, setPanelOpen] = useState(true);
-  const showHistory = kw.length >= 2 && panelOpen;
-  // What to show: pinned node sessions, or all matching sessions
-  const displayedSessions = pinnedNodeId !== null ? clickedSessions : matchingSessions;
+  const showHistory = kw.length >= 2 && !panelDismissed;
+
+  // Use LLM-selected sources to filter sessions; use convId (conversation) for session matching
+  const aiSourceIds = useMemo(() => new Set(aiSources.map(s => s.convId ?? s.id)), [aiSources]);
+  const aiMatchedSessions = useMemo(
+    () => aiSources.length > 0 ? sessions.filter(s => aiSourceIds.has(s.id)) : matchingSessions,
+    [aiSources, aiSourceIds, sessions, matchingSessions]
+  );
+
+  // What to show: pinned node sessions, LLM-filtered sessions, or keyword fallback
+  const displayedSessions = pinnedNodeId !== null ? clickedSessions : aiMatchedSessions;
 
   return (
     <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden" style={{ background: "var(--bg-deep)" }}>
@@ -403,8 +415,7 @@ export function GraphCenter({ searchKeyword, sessions = [], sessionsLoading = fa
         <ObsidianGraph
           searchKeyword={searchKeyword}
           highlightedNodes={highlightedNodes}
-          nodeDates={nodeDates}
-          onNodeClick={handleNodeClick}
+onNodeClick={handleNodeClick}
         />
 
         {/* Idle hint — hidden when panel is open */}
@@ -522,24 +533,24 @@ export function GraphCenter({ searchKeyword, sessions = [], sessionsLoading = fa
                       </span>
                     </div>
                   </div>
-                  {pinnedNodeId !== null && (
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {pinnedNodeId !== null && (
+                      <button
+                        onClick={handleUnpin}
+                        className="flex-shrink-0 px-2 py-1 rounded text-[10px]"
+                        style={{ color: "var(--blue)", background: "rgba(79,138,255,0.1)", border: "1px solid rgba(79,138,255,0.2)" }}
+                      >
+                        Show all
+                      </button>
+                    )}
                     <button
-                      onClick={handleUnpin}
-                      className="mr-1 flex-shrink-0 px-2 py-1 rounded text-[10px]"
-                      style={{ color: "var(--blue)", background: "rgba(79,138,255,0.1)", border: "1px solid rgba(79,138,255,0.2)" }}
+                      onClick={() => setPanelDismissed(true)}
+                      className="flex-shrink-0 p-1 rounded"
+                      style={{ color: "var(--text-muted)" }}
                     >
-                      Show all
+                      <X size={14} />
                     </button>
-                  )}
-                  {/* Close button: small × in panel header that only updates local panel state */}
-                  <button
-                    onClick={() => setPanelOpen(false)}
-                    aria-label="Close memory search"
-                    className="ml-2 flex-shrink-0 text-[14px] leading-none px-2 py-1 rounded"
-                    style={{ color: "var(--text-muted)", background: "transparent", border: "none" }}
-                  >
-                    ×
-                  </button>
+                  </div>
                 </div>
 
                 {/* Hint row */}
@@ -581,22 +592,67 @@ export function GraphCenter({ searchKeyword, sessions = [], sessionsLoading = fa
                         <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>
                           {aiAnswer}
                         </p>
+
+                        {/* Source cards — platform, date, summary */}
                         {aiSources.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-2">
-                            {aiSources.map((src) => (
-                              <span
-                                key={src.id}
-                                className="text-[9px] px-1.5 py-0.5 rounded-full truncate max-w-[160px]"
-                                style={{
-                                  background: src.platform ? `${PLATFORM_COLORS[src.platform] ?? "#4f8aff"}18` : "rgba(79,138,255,0.1)",
-                                  color: src.platform ? PLATFORM_COLORS[src.platform] ?? "#4f8aff" : "#4f8aff",
-                                  border: `1px solid ${src.platform ? PLATFORM_COLORS[src.platform] ?? "#4f8aff" : "#4f8aff"}33`,
-                                }}
-                                title={src.title}
-                              >
-                                {src.title}
-                              </span>
-                            ))}
+                          <div className="flex flex-col gap-2 mt-3">
+                            <span className="text-[9px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+                              Sources ({aiSources.length})
+                            </span>
+                            {aiSources.map((src) => {
+                              const color = src.platform ? PLATFORM_COLORS[src.platform] ?? "#4f8aff" : "#4f8aff";
+                              const label = src.platform ? PLATFORM_LABELS[src.platform] ?? src.platform : "";
+                              return (
+                                <div
+                                  key={src.id}
+                                  className="rounded-lg px-3 py-2"
+                                  style={{
+                                    background: `${color}10`,
+                                    border: `1px solid ${color}28`,
+                                  }}
+                                >
+                                  <p className="text-[10px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>
+                                    {src.title}
+                                  </p>
+                                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                    {label && (
+                                      <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded" style={{ background: `${color}20`, color, border: `1px solid ${color}40` }}>
+                                        {label}
+                                      </span>
+                                    )}
+                                    {src.role && (
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)", color: "var(--text-muted)" }}>
+                                        {src.role === "user" ? "You" : "AI"}
+                                      </span>
+                                    )}
+                                    {src.date && (
+                                      <span className="flex items-center gap-1 text-[9px]" style={{ color: "var(--text-muted)" }}>
+                                        <Clock size={8} />
+                                        {src.date}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {src.snippet && (
+                                    <p className="text-[10px] leading-relaxed mt-1.5 line-clamp-3" style={{ color: "var(--text-secondary)" }}>
+                                      {src.snippet}
+                                    </p>
+                                  )}
+                                  {src.keywords && src.keywords.length > 0 && (
+                                    <div className="flex flex-wrap gap-1 mt-1.5">
+                                      {src.keywords.slice(0, 5).map((kw) => (
+                                        <span
+                                          key={kw}
+                                          className="text-[9px] px-1.5 py-0.5 rounded-full"
+                                          style={{ background: `${color}15`, color: "var(--text-muted)", border: `1px solid ${color}20` }}
+                                        >
+                                          {kw}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </>
@@ -726,11 +782,12 @@ export function GraphCenter({ searchKeyword, sessions = [], sessionsLoading = fa
                             </div>
                           ) : (
                             <div className="flex flex-col gap-3 p-3">
-                              {session.messages.map((msg: Message) => {
+                              {session.messages.filter((msg: Message) => {
+                                const content = (msg.content || "").trim();
+                                return content && content.toLowerCase().includes(kw);
+                              }).map((msg: Message) => {
                                 const content = (msg.content || "").trim();
                                 const isUser = msg.role === "user";
-                                const hasKw = content.toLowerCase().includes(kw);
-                                if (!content) return null;
                                 return (
                                   <div
                                     key={msg.id}
@@ -758,8 +815,8 @@ export function GraphCenter({ searchKeyword, sessions = [], sessionsLoading = fa
                                       style={{
                                         maxWidth: "calc(100% - 32px)",
                                         background: isUser ? "rgba(79,138,255,0.12)" : "rgba(255,255,255,0.04)",
-                                        border: `1px solid ${hasKw ? "rgba(79,138,255,0.5)" : isUser ? "rgba(79,138,255,0.2)" : "var(--border-subtle)"}`,
-                                        boxShadow: hasKw ? "0 0 10px rgba(79,138,255,0.15)" : "none",
+                                        border: `1px solid ${isUser ? "rgba(79,138,255,0.2)" : "var(--border-subtle)"}`,
+                                        boxShadow: "none",
                                       }}
                                     >
                                       <div style={{ maxHeight: "200px", overflowY: "auto" }}>

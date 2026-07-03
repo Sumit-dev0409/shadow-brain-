@@ -5,6 +5,8 @@ class ConversationService {
   async createOrUpdate(data) {
     const { platform, external_id, title, messages, saved_at, captured_at, url } = data;
 
+    logger.info(`DEBUG: [BEFORE DB SAVE] ExternalId: ${external_id}, Platform: ${platform}`);
+
     const normalizedPlatform = platform ? platform.toLowerCase() : 'chatgpt';
 
     const newMessages = (messages || []).map(m => ({
@@ -29,17 +31,14 @@ class ConversationService {
       }
     };
 
-    // Only include messages in $set if the new ones have real content.
-    // Otherwise fall back to a $setOnInsert so first-time inserts still get the array.
+    // messages must appear in $set OR $setOnInsert — never both (MongoDB rejects that)
     if (newHasContent) {
       conversationData.messages = newMessages;
     }
 
-    const setOnInsertData = {
-      status: 'PENDING'
-    };
+    const setOnInsert = { status: 'PENDING' };
     if (!newHasContent) {
-      setOnInsertData.messages = newMessages;
+      setOnInsert.messages = newMessages;
     }
 
     try {
@@ -47,7 +46,7 @@ class ConversationService {
         { externalId: external_id, platform: normalizedPlatform },
         {
           $set: conversationData,
-          $setOnInsert: setOnInsertData
+          $setOnInsert: setOnInsert,
         },
         { upsert: true, returnDocument: 'after', runValidators: true }
       );

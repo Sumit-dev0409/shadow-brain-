@@ -21,6 +21,7 @@ import {
   fetchConversations,
   saveConversation,
   ApiConversation,
+  MemorySource,
 } from "./lib/api";
 
 type Stage = "loading" | "auth" | "select-agents" | "app";
@@ -71,6 +72,8 @@ export default function Home() {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [searchHistory, setSearchHistory] = useState<SearchRecord[]>([]);
+  const [aiSources, setAiSources] = useState<MemorySource[]>([]);
+  const [panelResetKey, setPanelResetKey] = useState(0);
 
   // Track which session IDs have already been saved to backend
   const persistedIds = useRef<Set<string>>(new Set());
@@ -250,9 +253,16 @@ export default function Home() {
 
   const handleHistoryUpdate = useCallback((record: SearchRecord) => {
     setSearchHistory((prev) => {
-      const filtered = prev.filter((r) => r.keyword !== record.keyword);
-      return [record, ...filtered];
+      const existing = prev.find((r) => r.keyword === record.keyword);
+      const merged = existing ? { ...record, summary: record.summary ?? existing.summary } : record;
+      return [merged, ...prev.filter((r) => r.keyword !== record.keyword)];
     });
+  }, []);
+
+  const handleAiAnswerReady = useCallback((keyword: string, answer: string) => {
+    setSearchHistory((prev) =>
+      prev.map((r) => r.keyword === keyword ? { ...r, summary: answer } : r)
+    );
   }, []);
 
   const handleForgetPast = useCallback(() => {
@@ -276,6 +286,13 @@ export default function Home() {
     });
   }, [sortedSessions, selectedAgents]);
 
+  // When a search is active and the LLM has returned sources, show only those in the sidebar
+  const sidebarSessions = useMemo(() => {
+    if (!searchKeyword.trim() || aiSources.length === 0) return filteredSessions;
+    const ids = new Set(aiSources.map((s) => s.convId ?? s.id));
+    return filteredSessions.filter((s) => ids.has(s.id));
+  }, [filteredSessions, searchKeyword, aiSources]);
+
   const activeSession = sessions.find((s) => s.id === activeId);
 
   if (stage === "loading") {
@@ -292,7 +309,7 @@ export default function Home() {
     <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg-deep)", width: "100vw" }}>
       {/* Left sidebar */}
       <Sidebar
-        sessions={filteredSessions}
+        sessions={sidebarSessions}
         activeId={activeId}
         onSelect={handleSelect}
         onNewChat={handleNewChat}
@@ -320,9 +337,12 @@ export default function Home() {
       ) : (
         <GraphCenter
           searchKeyword={searchKeyword}
+          onAiSourcesChange={setAiSources}
+          onAiAnswerReady={handleAiAnswerReady}
+          panelResetKey={panelResetKey}
           sessions={filteredSessions}
           sessionsLoading={sessionsLoading}
-          onSessionSelect={handleSelect}
+          selectedAgents={selectedAgents}
         />
       )}
 
@@ -330,6 +350,7 @@ export default function Home() {
       <RightPanel
         searchKeyword={searchKeyword}
         onSearchChange={setSearchKeyword}
+        onOpenPanel={() => setPanelResetKey((k) => k + 1)}
         searchHistory={searchHistory}
         onHistoryUpdate={handleHistoryUpdate}
         onForgetPast={handleForgetPast}

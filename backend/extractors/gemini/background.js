@@ -27,7 +27,11 @@ async function saveConversation(data, source = 'realtime') {
 
     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
     await updateMeta(conversations);
-    // Sync handled by popup (MV3 service workers cannot fetch localhost)
+
+    // Sync to backend immediately (fire and forget)
+    syncToBackend(data).catch(err => {
+      console.warn('[Brain Shadow] Backend sync failed (local save OK):', err.message);
+    });
 
     const tag = source === 'realtime' ? '🔴 Live' : '📦 Bulk';
     console.log(`[Brain Shadow] ${tag} saved: ${data.title} (${data.messages.length} msgs)`);
