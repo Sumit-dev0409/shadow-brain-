@@ -53,11 +53,32 @@ export async function sendChatMessage(
 
 export async function fetchConversations(): Promise<ApiConversation[]> {
   try {
-    const res = await fetch(`${API_BASE}/api/conversations?limit=50`);
+    const res = await fetch(`${API_BASE}/api/conversations?limit=500`);
     if (!res.ok) return [];
     return res.json();
   } catch {
     return [];
+  }
+}
+
+export interface MemorySource {
+  id: string;
+  title: string;
+  platform: string;
+  summary?: string | null;
+}
+
+export async function searchMemory(query: string): Promise<{ answer: string; sources: MemorySource[] }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/conversations/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    });
+    if (!res.ok) throw new Error(`Search error ${res.status}`);
+    return res.json();
+  } catch {
+    return { answer: 'Could not reach the backend. Make sure it is running on port 8000.', sources: [] };
   }
 }
 

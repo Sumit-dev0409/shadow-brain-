@@ -126,10 +126,23 @@ function buildEnrichment(raw) {
 
 // ══════════════════════════════════════════════════════════
 class EnrichmentService {
+  hasUsableEnrichment(conversation = {}) {
+    const enrichment = conversation.enrichment || {};
+    const metadata = conversation.metadata || {};
+    return Boolean(
+      enrichment.topic || enrichment.summary || metadata.topic || metadata.summary
+    );
+  }
+
   async process(conversationId, attempt = 1) {
     const conversation = await conversationService.getById(conversationId);
     if (!conversation) {
       logger.error(`Enrichment failed: Conversation not found: ${conversationId}`);
+      return;
+    }
+
+    if (this.hasUsableEnrichment(conversation) && conversation.status === 'COMPLETED') {
+      logger.info(`[ENRICHMENT SKIP] ${conversationId} already has enrichment data.`);
       return;
     }
 
@@ -162,8 +175,8 @@ class EnrichmentService {
           logger.error(`Retry trigger failed: ${err.message}`)
         );
       } else {
-        await conversationService.updateStatus(conversationId, 'PENDING', null);
-        logger.warn(`[ENRICHMENT] Kept as PENDING after 3 attempts`);
+        await conversationService.updateStatus(conversationId, 'FAILED', error.message);
+        logger.warn(`[ENRICHMENT] Marked as FAILED after 3 attempts`);
       }
     }
   }
@@ -182,12 +195,27 @@ class EnrichmentService {
       logger.info(`[RETRY] Reset ${resetResult.modifiedCount} stale FAILED/PROCESSING → PENDING`);
     }
 
-    const pending = await Conversation.find(
-      { status: { $in: ['PENDING', 'PROCESSING'] } }
-    ).select('_id title').lean();
+    const pending = await Conversation.find({
+      $or: [
+        { status: { $in: ['PENDING', 'PROCESSING', 'FAILED', 'RETRYING'] } },
+        {
+          status: 'COMPLETED',
+          $or: [
+            { 'enrichment.topic': { $exists: false } },
+            { 'enrichment.summary': { $exists: false } },
+            { 'metadata.topic': { $exists: false } },
+            { 'metadata.summary': { $exists: false } },
+            { 'enrichment.topic': null },
+            { 'enrichment.summary': null },
+            { 'metadata.topic': null },
+            { 'metadata.summary': null },
+          ],
+        },
+      ],
+    }).select('_id title status').lean();
 
     if (pending.length === 0) {
-      logger.info('[RETRY] All conversations are COMPLETED — nothing to enrich');
+      logger.info('[RETRY] No conversations need enrichment right now');
       return;
     }
 

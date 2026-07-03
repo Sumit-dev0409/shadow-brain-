@@ -1,16 +1,17 @@
 "use client";
 
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, MessageSquare, Clock } from "lucide-react";
+import { MessageSquare, Clock, Sparkles, Loader2 } from "lucide-react";
 import { ObsidianGraph } from "./ObsidianGraph";
 import { ChatSession, Message } from "@/app/types";
+import { searchMemory, MemorySource } from "@/app/lib/api";
 
 interface GraphCenterProps {
   searchKeyword: string;
-  onNodeSelect?: (nodeId: number, keyword: string) => void;
   sessions?: ChatSession[];
   sessionsLoading?: boolean;
+  onSessionSelect?: (id: string) => void;
 }
 
 const PLATFORM_COLORS: Record<string, string> = {
@@ -59,6 +60,11 @@ function fmtDate(date: Date): string {
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date);
 }
 
+/** Short label shown on the canvas node e.g. "Jun 18" */
+function fmtNodeDate(date: Date): string {
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(date);
+}
+
 /**
  * Deterministically map a session to a node ID so the same session
  * always lights up the same node across renders.
@@ -70,64 +76,253 @@ function sessionToNodeId(sessionId: string): number {
   return 8 + (h % 992);
 }
 
-export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessionsLoading = false }: GraphCenterProps) {
-  const [selectedNode, setSelectedNode] = useState<{ nodeId: number; keyword: string } | null>(null);
-  const [showHistory, setShowHistory] = useState(false);
-  // Stores the sessions that matched when the node was clicked — avoids stale useMemo re-filter
+// ── Matching helpers ────────────────────────────────────────────────────────
+
+function stem(w: string): string {
+  if (w.length <= 3) return w;
+  const rules: [string, string][] = [
+    ["ations","ate"],["nesses",""],["ments",""],["ities",""],
+    ["ation","ate"],["tions",""],["izing",""],["ising",""],
+    ["ness",""],["ment",""],["ical",""],["able",""],["ible",""],
+    ["ized",""],["ised",""],["ings",""],["ally",""],["edly",""],
+    ["ing",""],["ied","y"],["ies","y"],["ion",""],["ive",""],
+    ["ous",""],["ful",""],["ish",""],["ed",""],["er",""],
+    ["es",""],["ly",""],["s",""],
+  ];
+  for (const [suf, rep] of rules) {
+    if (w.endsWith(suf) && w.length - suf.length >= 3)
+      return w.slice(0, w.length - suf.length) + rep;
+  }
+  return w;
+}
+
+// Related-term clusters for AI/tech domains
+const CLUSTERS: string[][] = [
+  ["ai","artificial intelligence","ml","machine learning","deep learning","neural network","llm","gpt","language model","generative","transformer"],
+  ["python","py","pandas","numpy","sklearn","scikit","tensorflow","pytorch","keras","jupyter","notebook","colab"],
+  ["javascript","js","typescript","ts","node","nodejs","react","vue","angular","frontend","web","browser","dom","html","css"],
+  ["code","coding","programming","program","script","scripting","software","development","developer","implement","implementation","engineer"],
+  ["data","dataset","database","sql","nosql","mongo","postgres","mysql","query","analytics","analysis","statistics","excel","csv","json"],
+  ["api","rest","restful","http","endpoint","request","response","graphql","websocket","fetch","axios","webhook"],
+  ["bug","error","issue","problem","fix","debug","debugging","crash","exception","traceback","troubleshoot"],
+  ["cloud","aws","azure","gcp","docker","kubernetes","container","devops","cicd","deploy","deployment","server","hosting"],
+  ["image","photo","picture","vision","ocr","recognition","detect","detection","classify","segmentation"],
+  ["nlp","natural language","text","sentence","token","embed","embedding","semantic","sentiment","summarize","summarization"],
+  ["function","method","class","object","variable","array","list","dict","map","loop","recursion","algorithm"],
+  ["test","testing","unit test","integration","mock","assert","jest","pytest","qa","quality"],
+  ["git","github","gitlab","version","branch","commit","merge","pull request","pr","repo","repository"],
+  ["design","ui","ux","interface","layout","figma","style","color","font","responsive","accessibility"],
+  ["performance","speed","optimiz","latency","throughput","cache","scalab","efficient"],
+  ["security","auth","authentication","login","password","encrypt","jwt","oauth","token","permission","access"],
+  ["finance","stock","invest","trading","crypto","blockchain","bitcoin","market","portfolio","dividend"],
+  ["health","medical","doctor","hospital","medicine","drug","diagnosis","symptom","treatment","clinical"],
+  ["power bi","dax","powerbi","measure","visual","report","dashboard","bi","business intelligence","kpi"],
+];
+
+function getSynonyms(word: string, stemmedWord: string): string[] {
+  for (const cluster of CLUSTERS) {
+    if (cluster.some(term => term === word || term === stemmedWord || term.split(" ").includes(word) || term.split(" ").includes(stemmedWord))) {
+      return cluster.filter(t => !t.includes(" ")); // single-word synonyms only for matching
+    }
+  }
+  return [];
+}
+
+function wordScore(text: string, word: string, stemmedWord: string, synonyms: string[]): number {
+  if (text.includes(word)) return 1;
+  if (stemmedWord.length >= 3 && text.includes(stemmedWord)) return 0.85;
+  // Prefix match: search "implement" matches "implementing" and vice versa
+  if (word.length >= 4) {
+    const textWords = text.split(/\W+/);
+    if (textWords.some(tw => tw.startsWith(word) || (tw.length >= 4 && word.startsWith(tw)))) return 0.75;
+  }
+  // Synonym match
+  if (synonyms.some(s => text.includes(s))) return 0.65;
+  // Stemmed synonym match
+  if (synonyms.some(s => {
+    const ss = stem(s);
+    return ss.length >= 3 && text.includes(ss);
+  })) return 0.5;
+  return 0;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+
+export function GraphCenter({ searchKeyword, sessions = [], sessionsLoading = false, onSessionSelect }: GraphCenterProps) {
+  // null = auto mode (show all matches); set to a nodeId when user clicks a specific node
+  const [pinnedNodeId, setPinnedNodeId] = useState<number | null>(null);
   const [clickedSessions, setClickedSessions] = useState<ChatSession[]>([]);
+
+  // AI answer from backend memory search
+  const [aiAnswer, setAiAnswer] = useState<string>("");
+  const [aiSources, setAiSources] = useState<MemorySource[]>([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const aiDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const kw = searchKeyword.trim().toLowerCase();
 
-  // Find sessions matching the search keyword across all metadata + content
   const matchingSessions = useMemo(() => {
     if (kw.length < 2) return [];
-    return sessions.filter((s) => {
-      const platformLabel = (s.platform ? PLATFORM_LABELS[s.platform] ?? s.platform : "").toLowerCase();
-      return (
-        s.title.toLowerCase().includes(kw) ||
-        (s.topic?.toLowerCase().includes(kw) ?? false) ||
-        (s.category?.toLowerCase().includes(kw) ?? false) ||
-        (s.keywords?.some((k) => k.toLowerCase().includes(kw)) ?? false) ||
-        (s.summary?.toLowerCase().includes(kw) ?? false) ||
-        platformLabel.includes(kw) ||
-        (s.platform?.toLowerCase().includes(kw) ?? false) ||
-        s.messages.some((m) => m.content.toLowerCase().includes(kw))
-      );
-    });
+
+    const STOP = new Set([
+      "the","a","an","is","in","of","and","or","to","for","with","on","at",
+      "by","it","as","be","was","are","were","has","have","had","do","does",
+      "did","i","my","me","what","how","why","when","where","who","about",
+      "can","could","would","should","that","this","these","those","then",
+      "than","from","not","but","so","if","all","any","will","just","also",
+      "into","its","their","they","them","there","here","get","got","use",
+      "using","used","make","made","want","need","help","please","give",
+    ]);
+
+    const rawWords = kw.split(/\s+/).filter(w => w.length > 1 && !STOP.has(w));
+    if (rawWords.length === 0) return [];
+
+    const stemmedRaw  = rawWords.map(stem);
+    const synonymsRaw = rawWords.map((w, i) => getSynonyms(w, stemmedRaw[i]));
+
+    // More lenient threshold for longer queries
+    const minMatchCount =
+      rawWords.length <= 2 ? rawWords.length :
+      rawWords.length <= 4 ? Math.ceil(rawWords.length * 0.5) :
+                             Math.ceil(rawWords.length * 0.4);
+
+    // Full phrase match is a very strong signal
+    const fullPhrase = rawWords.join(" ");
+
+    return sessions
+      .map(s => {
+        const platformLabel = (s.platform ? PLATFORM_LABELS[s.platform] ?? s.platform : "").toLowerCase();
+        const title    = s.title.toLowerCase();
+        const kwText   = (s.keywords ?? []).join(" ").toLowerCase();
+        const topic    = (s.topic ?? "").toLowerCase();
+        const summary  = (s.summary ?? "").toLowerCase();
+        const category = (s.category ?? "").toLowerCase();
+        const msgs     = s.messages.map(m => m.content).join(" ").toLowerCase();
+
+        let score = 0;
+        let matched = 0;
+
+        // Bonus for full phrase appearing anywhere
+        if (rawWords.length > 1) {
+          if (title.includes(fullPhrase))   score += 30;
+          if (topic.includes(fullPhrase))   score += 25;
+          if (summary.includes(fullPhrase)) score += 18;
+          if (msgs.includes(fullPhrase))    score += 12;
+        }
+
+        // Per-word scoring with stemming + synonyms
+        for (let i = 0; i < rawWords.length; i++) {
+          const word = rawWords[i];
+          const sw   = stemmedRaw[i];
+          const syns = synonymsRaw[i];
+
+          const ts  = wordScore(title,         word, sw, syns);
+          const ks  = wordScore(kwText,        word, sw, syns);
+          const ps  = wordScore(topic,         word, sw, syns);
+          const ss  = wordScore(summary,       word, sw, syns);
+          const cs  = wordScore(category,      word, sw, syns);
+          const pls = wordScore(platformLabel, word, sw, syns);
+          const ms  = wordScore(msgs,          word, sw, syns);
+
+          const best = Math.max(ts, ks, ps, ss, cs, pls, ms);
+          if (best > 0) {
+            score   += ts * 10 + ks * 8 + ps * 7 + ss * 5 + cs * 4 + pls * 3 + ms * 1;
+            matched += best; // fractional credit for partial/synonym matches
+          }
+        }
+
+        return { s, score, matched };
+      })
+      .filter(x => x.matched >= minMatchCount * 0.75) // allow fractional tolerance
+      .sort((a, b) => b.score - a.score)
+      .map(x => x.s);
   }, [sessions, kw]);
 
   // Build both the color map (for ObsidianGraph) and a sessions lookup (for the panel)
   // in one pass over matchingSessions so they're always in sync.
-  const { highlightedNodes, nodeSessionsMap } = useMemo(() => {
+  const { highlightedNodes, nodeSessionsMap, nodeDates } = useMemo(() => {
     const colorMap = new Map<number, string>();
     const sessMap  = new Map<number, ChatSession[]>();
+    const dateMap  = new Map<number, string>();
     matchingSessions.forEach((s) => {
       const nodeId = sessionToNodeId(s.id);
       const color  = (s.platform && PLATFORM_COLORS[s.platform]) ? PLATFORM_COLORS[s.platform] : "#4f8aff";
       colorMap.set(nodeId, color);
       const existing = sessMap.get(nodeId) ?? [];
       sessMap.set(nodeId, [...existing, s]);
+      // Use the earliest session date for this node (first to set wins)
+      if (!dateMap.has(nodeId)) {
+        dateMap.set(nodeId, fmtNodeDate(s.lastMessageAt ?? s.createdAt));
+      }
     });
-    return { highlightedNodes: colorMap, nodeSessionsMap: sessMap };
+    return { highlightedNodes: colorMap, nodeSessionsMap: sessMap, nodeDates: dateMap };
   }, [matchingSessions]);
 
   // Keep a ref so handleNodeClick always reads the latest map without needing it as a dep
   const nodeSessionsMapRef = useRef(nodeSessionsMap);
   nodeSessionsMapRef.current = nodeSessionsMap;
 
-  // Clicking a node: look up sessions from the map that was current when highlights were built
-  const handleNodeClick = useCallback((nodeId: number, keyword: string) => {
+  // Auto-open panel with all matches when search is active; close when cleared
+  useEffect(() => {
+    if (kw.length < 2) {
+      setPinnedNodeId(null);
+      setClickedSessions([]);
+      setAiAnswer("");
+      setAiSources([]);
+      setAiLoading(false);
+      if (aiDebounce.current) clearTimeout(aiDebounce.current);
+      // Reset panel open state when search cleared so it re-opens on next search
+      setPanelOpen(true);
+      return;
+    }
+
+    // Ensure the panel is open when a search becomes active
+    setPanelOpen(true);
+
+    // Debounce AI search — fire 800ms after user stops typing
+    if (aiDebounce.current) clearTimeout(aiDebounce.current);
+    aiDebounce.current = setTimeout(async () => {
+      setAiLoading(true);
+      try {
+        const result = await searchMemory(searchKeyword.trim());
+        setAiAnswer(result.answer);
+        setAiSources(result.sources);
+      } catch {
+        setAiAnswer("");
+        setAiSources([]);
+      } finally {
+        setAiLoading(false);
+      }
+    }, 800);
+
+    return () => {
+      if (aiDebounce.current) clearTimeout(aiDebounce.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kw]);
+
+  // Clicking a node: pin to that node's sessions and open the selected conversation
+  const handleNodeClick = useCallback((nodeId: number, _keyword: string) => {
     const found = nodeSessionsMapRef.current.get(nodeId) ?? [];
     setClickedSessions(found);
-    setSelectedNode({ nodeId, keyword });
-    setShowHistory(true);
-  }, []);
+    setPinnedNodeId(nodeId);
+    if (found.length > 0 && onSessionSelect) {
+      onSessionSelect(found[0].id);
+    }
+  }, [onSessionSelect]);
 
-  const handleClose = useCallback(() => {
-    setShowHistory(false);
-    setSelectedNode(null);
+  // Unpin — go back to showing all matches
+  const handleUnpin = useCallback(() => {
+    setPinnedNodeId(null);
     setClickedSessions([]);
   }, []);
+
+  // Panel is visible whenever a search is active (AI answer or local matches)
+  // Use local panelOpen state so the popup can be closed without mutating parent props
+  const [panelOpen, setPanelOpen] = useState(true);
+  const showHistory = kw.length >= 2 && panelOpen;
+  // What to show: pinned node sessions, or all matching sessions
+  const displayedSessions = pinnedNodeId !== null ? clickedSessions : matchingSessions;
 
   return (
     <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden" style={{ background: "var(--bg-deep)" }}>
@@ -201,106 +396,104 @@ export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessio
         </div>
       </div>
 
-      {/* Graph + side history panel — flex row so graph stays interactive */}
-      <div className="flex-1 flex overflow-hidden">
+      {/* Graph canvas + overlays — single relative container, history panel is absolute overlay */}
+      <div className="flex-1 relative overflow-hidden" style={{ minHeight: 0, height: 0 }}>
 
-        {/* ── LEFT: graph canvas (always visible & clickable) ── */}
-        <div className="flex-1 relative min-w-0">
-          <ObsidianGraph
-            searchKeyword={searchKeyword}
-            highlightedNodes={highlightedNodes}
-            onNodeClick={handleNodeClick}
-          />
+        {/* Canvas always fills full space */}
+        <ObsidianGraph
+          searchKeyword={searchKeyword}
+          highlightedNodes={highlightedNodes}
+          nodeDates={nodeDates}
+          onNodeClick={handleNodeClick}
+        />
 
-          {/* Idle hint — shown when conversations are loaded but no search yet */}
-          <AnimatePresence>
-            {kw.length < 2 && sessions.length > 0 && !sessionsLoading && (
-              <motion.div
-                key="idle-hint"
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.3 }}
-                className="absolute top-4 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded-full text-[11px] font-medium pointer-events-none"
-                style={{
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid var(--border-subtle)",
-                  color: "var(--text-muted)",
-                  backdropFilter: "blur(8px)",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                Search in the right panel to highlight and click your conversations
-              </motion.div>
-            )}
-          </AnimatePresence>
+        {/* Idle hint — hidden when panel is open */}
+        <AnimatePresence>
+          {kw.length < 2 && sessions.length > 0 && !sessionsLoading && !showHistory && (
+            <motion.div
+              key="idle-hint"
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.3 }}
+              className="absolute top-4 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded-full text-[11px] font-medium pointer-events-none"
+              style={{
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid var(--border-subtle)",
+                color: "var(--text-muted)",
+                backdropFilter: "blur(8px)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Search in the right panel to highlight and click your conversations
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-          {/* Search active banner */}
-          <AnimatePresence>
-            {kw.length > 1 && (
-              <motion.div
-                key="search-banner"
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="absolute top-4 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded-full text-[11px] font-medium pointer-events-none"
-                style={{
-                  background: "rgba(79,138,255,0.15)",
-                  border: "1px solid var(--border-glow)",
-                  color: "var(--blue)",
-                  backdropFilter: "blur(8px)",
-                  boxShadow: "0 0 20px rgba(79,138,255,0.2)",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {matchingSessions.length > 0 ? (
-                  <>
-                    ✦ {matchingSessions.length} node{matchingSessions.length > 1 ? "s" : ""} highlighted
-                    {" — "}
-                    {[...new Set(matchingSessions.map((s) => s.platform).filter(Boolean))]
-                      .map((p) => PLATFORM_LABELS[p!] ?? p)
-                      .join(", ")}
-                    {" — click a node"}
-                  </>
-                ) : sessionsLoading ? (
-                  "⏳ Loading conversations…"
-                ) : sessions.length === 0 ? (
-                  "⚠ No conversations loaded — start the backend"
-                ) : (
-                  `No match for "${searchKeyword}" in ${sessions.length} conversations`
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
+        {/* Search active banner — hidden when panel is open */}
+        <AnimatePresence>
+          {kw.length > 1 && !showHistory && (
+            <motion.div
+              key="search-banner"
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+              className="absolute top-4 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded-full text-[11px] font-medium pointer-events-none"
+              style={{
+                background: "rgba(79,138,255,0.15)",
+                border: "1px solid var(--border-glow)",
+                color: "var(--blue)",
+                backdropFilter: "blur(8px)",
+                boxShadow: "0 0 20px rgba(79,138,255,0.2)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {matchingSessions.length > 0 ? (
+                <>
+                  ✦ {matchingSessions.length} node{matchingSessions.length > 1 ? "s" : ""} highlighted
+                  {" — "}
+                  {[...new Set(matchingSessions.map((s) => s.platform).filter(Boolean))]
+                    .map((p) => PLATFORM_LABELS[p!] ?? p)
+                    .join(", ")}
+                  {" — click a node"}
+                </>
+              ) : sessionsLoading ? (
+                "⏳ Loading conversations…"
+              ) : sessions.length === 0 ? (
+                "⚠ No conversations loaded — start the backend"
+              ) : (
+                `No match for "${searchKeyword}" in ${sessions.length} conversations`
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-          {/* Bottom label */}
+        {!showHistory && (
           <div
             className="absolute bottom-4 left-1/2 -translate-x-1/2 text-[10px] select-none pointer-events-none"
             style={{ color: "var(--text-muted)" }}
           >
             Shadow Brain Memory Network · Continuously rotating
           </div>
-        </div>
+        )}
 
-        {/* ── RIGHT: history side panel (slides in, graph stays clickable) ── */}
+        {/* History panel — absolute overlay sliding from right, canvas stays full-width */}
         <AnimatePresence>
-          {showHistory && selectedNode && (
+          {showHistory && (
             <motion.div
               key="history-panel"
-              initial={{ width: 0 }}
-              animate={{ width: 440 }}
-              exit={{ width: 0 }}
+              className="absolute top-0 right-0 bottom-0 flex flex-col"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
               transition={{ type: "spring", stiffness: 300, damping: 32 }}
               style={{
-                overflow: "hidden",
-                flexShrink: 0,
+                width: 440,
                 borderLeft: "1px solid var(--border-subtle)",
                 background: "rgba(6,8,18,0.98)",
               }}
             >
-              {/* Fixed-width inner so content doesn't squish during animation */}
-              <div className="flex flex-col h-full" style={{ width: 440 }}>
 
                 {/* Panel header */}
                 <div
@@ -309,36 +502,47 @@ export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessio
                 >
                   <div className="min-w-0 flex-1">
                     <p className="text-[13px] font-bold truncate" style={{ color: "var(--text-primary)" }}>
-                      {clickedSessions.length === 1 ? clickedSessions[0].title : "Chat History"}
+                      {displayedSessions.length === 1 ? displayedSessions[0].title : "Memory Search Results"}
                     </p>
                     <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                      {clickedSessions.length === 1 && clickedSessions[0].platform && PLATFORM_LABELS[clickedSessions[0].platform] && (
+                      {displayedSessions.length === 1 && displayedSessions[0].platform && PLATFORM_LABELS[displayedSessions[0].platform] && (
                         <span
                           className="text-[9px] font-semibold px-1.5 py-0.5 rounded"
                           style={{
-                            background: `${PLATFORM_COLORS[clickedSessions[0].platform]}18`,
-                            color: PLATFORM_COLORS[clickedSessions[0].platform],
-                            border: `1px solid ${PLATFORM_COLORS[clickedSessions[0].platform]}33`,
+                            background: `${PLATFORM_COLORS[displayedSessions[0].platform]}18`,
+                            color: PLATFORM_COLORS[displayedSessions[0].platform],
+                            border: `1px solid ${PLATFORM_COLORS[displayedSessions[0].platform]}33`,
                           }}
                         >
-                          {PLATFORM_LABELS[clickedSessions[0].platform]}
+                          {PLATFORM_LABELS[displayedSessions[0].platform]}
                         </span>
                       )}
                       <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-                        &ldquo;{selectedNode.keyword}&rdquo; · {clickedSessions.length} conversation{clickedSessions.length !== 1 ? "s" : ""}
+                        &ldquo;{searchKeyword}&rdquo; · {displayedSessions.length} conversation{displayedSessions.length !== 1 ? "s" : ""}
                       </span>
                     </div>
                   </div>
+                  {pinnedNodeId !== null && (
+                    <button
+                      onClick={handleUnpin}
+                      className="mr-1 flex-shrink-0 px-2 py-1 rounded text-[10px]"
+                      style={{ color: "var(--blue)", background: "rgba(79,138,255,0.1)", border: "1px solid rgba(79,138,255,0.2)" }}
+                    >
+                      Show all
+                    </button>
+                  )}
+                  {/* Close button: small × in panel header that only updates local panel state */}
                   <button
-                    onClick={handleClose}
-                    className="ml-2 flex-shrink-0 p-1.5 rounded-lg"
-                    style={{ color: "var(--text-muted)" }}
+                    onClick={() => setPanelOpen(false)}
+                    aria-label="Close memory search"
+                    className="ml-2 flex-shrink-0 text-[14px] leading-none px-2 py-1 rounded"
+                    style={{ color: "var(--text-muted)", background: "transparent", border: "none" }}
                   >
-                    <X size={15} />
+                    ×
                   </button>
                 </div>
 
-                {/* Hint: clicking another node switches conversation */}
+                {/* Hint row */}
                 <div
                   className="px-4 py-2 text-[10px] flex-shrink-0"
                   style={{
@@ -347,13 +551,66 @@ export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessio
                     color: "var(--text-muted)",
                   }}
                 >
-                  ↙ Click any highlighted node in the graph to switch conversation
+                  {pinnedNodeId !== null
+                    ? "↙ Click another highlighted node to switch · or Show all to see every match"
+                    : "✦ Click any highlighted node to filter to that conversation"}
                 </div>
 
-                {/* Scrollable messages */}
-                <div className="flex-1 overflow-y-auto p-4">
-                  {clickedSessions.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full gap-3">
+                {/* Scrollable content */}
+                <div className="flex-1 overflow-y-auto">
+
+                  {/* AI Answer block — always at top when search is active */}
+                  <div
+                    className="px-4 pt-4 pb-3"
+                    style={{ borderBottom: "1px solid var(--border-subtle)" }}
+                  >
+                    <div className="flex items-center gap-1.5 mb-2">
+                      <Sparkles size={12} style={{ color: "#8b5cf6" }} />
+                      <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8b5cf6" }}>
+                        AI Memory Answer
+                      </span>
+                    </div>
+
+                    {aiLoading ? (
+                      <div className="flex items-center gap-2 py-2">
+                        <Loader2 size={13} className="animate-spin" style={{ color: "var(--text-muted)" }} />
+                        <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>Searching memory…</span>
+                      </div>
+                    ) : aiAnswer ? (
+                      <>
+                        <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>
+                          {aiAnswer}
+                        </p>
+                        {aiSources.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {aiSources.map((src) => (
+                              <span
+                                key={src.id}
+                                className="text-[9px] px-1.5 py-0.5 rounded-full truncate max-w-[160px]"
+                                style={{
+                                  background: src.platform ? `${PLATFORM_COLORS[src.platform] ?? "#4f8aff"}18` : "rgba(79,138,255,0.1)",
+                                  color: src.platform ? PLATFORM_COLORS[src.platform] ?? "#4f8aff" : "#4f8aff",
+                                  border: `1px solid ${src.platform ? PLATFORM_COLORS[src.platform] ?? "#4f8aff" : "#4f8aff"}33`,
+                                }}
+                                title={src.title}
+                              >
+                                {src.title}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+                        No memory answer yet — type to search.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Session cards */}
+                  <div className="p-4">
+                  {displayedSessions.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-8 gap-3">
                       <MessageSquare size={32} style={{ color: "var(--text-muted)", opacity: 0.25 }} />
                       <p className="text-[13px] font-medium" style={{ color: "var(--text-muted)" }}>
                         No conversations for this node
@@ -364,7 +621,10 @@ export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessio
                     </div>
                   ) : (
                     <div className="flex flex-col gap-5">
-                      {clickedSessions.map((session, sIdx) => (
+                      {displayedSessions.map((session, sIdx) => {
+                        const hasAnyContent = session.messages.some(m => (m.content || "").trim().length > 0);
+                        const platformColor = session.platform ? PLATFORM_COLORS[session.platform] ?? "#4f8aff" : "#4f8aff";
+                        return (
                         <motion.div
                           key={session.id}
                           initial={{ opacity: 0, y: 12 }}
@@ -376,8 +636,8 @@ export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessio
                             border: "1px solid var(--border-subtle)",
                           }}
                         >
-                          {/* Session header */}
-                          {clickedSessions.length > 1 && (
+                          {/* Session header — always shown when multiple sessions visible */}
+                          {displayedSessions.length > 1 && (
                             <div
                               className="flex items-center justify-between px-3 py-2.5"
                               style={{ background: "rgba(79,138,255,0.06)", borderBottom: "1px solid var(--border-subtle)" }}
@@ -385,7 +645,7 @@ export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessio
                               <div className="flex items-center gap-2 min-w-0">
                                 <span
                                   className="w-2 h-2 rounded-full flex-shrink-0"
-                                  style={{ background: session.platform ? PLATFORM_COLORS[session.platform] ?? "#4f8aff" : "#4f8aff" }}
+                                  style={{ background: platformColor }}
                                 />
                                 <p className="text-[12px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>
                                   {session.title}
@@ -396,9 +656,9 @@ export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessio
                                   <span
                                     className="text-[9px] font-semibold px-1.5 py-0.5 rounded"
                                     style={{
-                                      background: `${PLATFORM_COLORS[session.platform]}18`,
-                                      color: PLATFORM_COLORS[session.platform],
-                                      border: `1px solid ${PLATFORM_COLORS[session.platform]}33`,
+                                      background: `${platformColor}18`,
+                                      color: platformColor,
+                                      border: `1px solid ${platformColor}33`,
                                     }}
                                   >
                                     {PLATFORM_LABELS[session.platform]}
@@ -414,16 +674,63 @@ export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessio
                             </div>
                           )}
 
+                          {/* Enrichment metadata — always show if available */}
+                          {(session.summary || session.topic || (session.keywords && session.keywords.length > 0)) && (
+                            <div
+                              className="px-3 py-2.5"
+                              style={{ background: `${platformColor}08`, borderBottom: "1px solid var(--border-subtle)" }}
+                            >
+                              {session.topic && (
+                                <p className="text-[10px] font-semibold mb-1" style={{ color: platformColor }}>
+                                  {session.topic}
+                                </p>
+                              )}
+                              {session.summary && (
+                                <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                                  {session.summary}
+                                </p>
+                              )}
+                              {session.keywords && session.keywords.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1.5">
+                                  {session.keywords.slice(0, 6).map((kw) => (
+                                    <span
+                                      key={kw}
+                                      className="text-[9px] px-1.5 py-0.5 rounded-full"
+                                      style={{
+                                        background: `${platformColor}18`,
+                                        color: "var(--text-secondary)",
+                                        border: `1px solid ${platformColor}22`,
+                                      }}
+                                    >
+                                      {kw}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
                           {/* Messages */}
                           {session.messages.length === 0 ? (
                             <div className="px-4 py-6 text-center">
-                              <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>No messages yet.</p>
+                              <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>No messages recorded.</p>
+                            </div>
+                          ) : !hasAnyContent ? (
+                            <div className="px-4 py-5 text-center">
+                              <p className="text-[11px] mb-1" style={{ color: "var(--text-muted)" }}>
+                                {session.messages.length} message{session.messages.length !== 1 ? "s" : ""} — content not captured
+                              </p>
+                              <p className="text-[10px]" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+                                The conversation was indexed for search but full text was not stored.
+                              </p>
                             </div>
                           ) : (
                             <div className="flex flex-col gap-3 p-3">
-                              {session.messages.map((msg: Message, mIdx: number) => {
+                              {session.messages.map((msg: Message) => {
+                                const content = (msg.content || "").trim();
                                 const isUser = msg.role === "user";
-                                const hasKw = msg.content.toLowerCase().includes(kw);
+                                const hasKw = content.toLowerCase().includes(kw);
+                                if (!content) return null;
                                 return (
                                   <div
                                     key={msg.id}
@@ -436,7 +743,7 @@ export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessio
                                       style={{
                                         background: isUser
                                           ? "linear-gradient(135deg,#4f8aff,#8b5cf6)"
-                                          : (session.platform ? PLATFORM_COLORS[session.platform] ?? "#374151" : "#374151"),
+                                          : platformColor,
                                         color: "#fff",
                                         marginTop: 2,
                                         boxShadow: isUser ? "0 0 8px rgba(79,138,255,0.3)" : "none",
@@ -460,7 +767,7 @@ export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessio
                                           className="text-[12px] leading-relaxed"
                                           style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
                                         >
-                                          {msg.content}
+                                          {content}
                                         </p>
                                       </div>
                                       <p className="text-[9px] mt-1" style={{ color: "var(--text-muted)", textAlign: isUser ? "right" : "left" }}>
@@ -473,15 +780,15 @@ export function GraphCenter({ searchKeyword, onNodeSelect, sessions = [], sessio
                             </div>
                           )}
                         </motion.div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
-                </div>
-              </div>
+                  </div>{/* end p-4 session cards wrapper */}
+                </div>{/* end scrollable content */}
             </motion.div>
           )}
         </AnimatePresence>
-
       </div>
     </div>
   );

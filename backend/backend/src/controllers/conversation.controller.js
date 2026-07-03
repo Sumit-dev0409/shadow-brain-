@@ -1,5 +1,6 @@
 const conversationService = require('../services/conversation.service');
 const enrichmentService = require('../services/enrichment.service');
+const groqService = require('../services/groq.service');
 const logger = require('../utils/logger');
 
 const createConversation = async (req, res, next) => {
@@ -102,10 +103,90 @@ const getConversationStatus = async (req, res, next) => {
   }
 };
 
+const searchConversations = async (req, res, next) => {
+  try {
+    const { query } = req.body;
+    if (!query || typeof query !== 'string') {
+      return res.status(400).json({ message: 'query is required' });
+    }
+
+    const kw = query.toLowerCase();
+    const words = kw.split(/\s+/).filter(w => w.length > 2);
+
+    if (words.length === 0) {
+      return res.json({ answer: 'Please provide a more specific query.', sources: [] });
+    }
+
+    const allConvs = await conversationService.list({}, { limit: 200 });
+
+    const scored = allConvs
+      .map(conv => {
+        const text = [
+          conv.title || '',
+          conv.enrichment?.topic || '',
+          conv.enrichment?.summary || '',
+          ...(conv.enrichment?.keywords || []),
+          ...conv.messages.map(m => m.content || '')
+        ].join(' ').toLowerCase();
+
+        const score = words.reduce((acc, w) => {
+          const safe = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return acc + (text.match(new RegExp(safe, 'g')) || []).length;
+        }, 0);
+
+        return { conv, score };
+      })
+      .filter(x => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+
+    if (scored.length === 0) {
+      return res.json({
+        answer: `No conversations found related to "${query}". Try different keywords or make sure your conversations have been imported.`,
+        sources: []
+      });
+    }
+
+    const context = scored.map(({ conv }) => {
+      const summary = conv.enrichment?.summary;
+      const msgs = conv.messages.slice(0, 8)
+        .map(m => `${m.role === 'user' ? 'User' : 'AI'}: ${(m.content || '').slice(0, 400)}`)
+        .join('\n');
+      return [`### "${conv.title}" [${conv.platform}]`, summary ? `Summary: ${summary}` : '', msgs]
+        .filter(Boolean).join('\n');
+    }).join('\n\n---\n\n');
+
+    const systemPrompt = `You are Brain Shadow, helping the user search their stored AI conversations.
+
+User's question: "${query}"
+
+Most relevant conversations:
+
+${context}
+
+Answer based on these conversations. Reference conversation title(s) when relevant. Be concise and direct. If the exact answer isn't present, share what related info was found.`;
+
+    const result = await groqService.chat([{ role: 'user', content: query }], systemPrompt);
+
+    const sources = scored.map(({ conv }) => ({
+      id: conv._id,
+      title: conv.title || 'Untitled',
+      platform: conv.platform || 'unknown',
+      summary: conv.enrichment?.summary || null,
+    }));
+
+    res.json({ answer: result.content, sources });
+  } catch (err) {
+    logger.error(`[Search] ${err.message}`);
+    next(err);
+  }
+};
+
 module.exports = {
   createConversation,
   bulkCreateConversations,
   listConversations,
   getConversationById,
-  getConversationStatus
+  getConversationStatus,
+  searchConversations,
 };

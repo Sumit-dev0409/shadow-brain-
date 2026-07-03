@@ -260,6 +260,24 @@ export default function Home() {
     setSearchKeyword("");
   }, []);
 
+  // Hooks must be called unconditionally — before any early returns
+  const sortedSessions = useMemo(
+    () => [...sessions].sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime()),
+    [sessions]
+  );
+
+  // Filter to only sessions from selected agents (mscopilot counts as copilot)
+  const filteredSessions = useMemo(() => {
+    if (selectedAgents.length === 0) return sortedSessions;
+    return sortedSessions.filter((s) => {
+      if (!s.platform || s.platform === "brain-shadow") return true;
+      const key = s.platform === "mscopilot" ? "copilot" : s.platform;
+      return selectedAgents.includes(key);
+    });
+  }, [sortedSessions, selectedAgents]);
+
+  const activeSession = sessions.find((s) => s.id === activeId);
+
   if (stage === "loading") {
     return <div className="min-h-screen w-full" style={{ background: "var(--bg-deep)" }} />;
   }
@@ -270,19 +288,11 @@ export default function Home() {
     return <AgentSelectScreen initialSelected={selectedAgents} onContinue={handleAgentsSelected} />;
   }
 
-  // Always show most-recently-active session first
-  const sortedSessions = useMemo(
-    () => [...sessions].sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime()),
-    [sessions]
-  );
-
-  const activeSession = sessions.find((s) => s.id === activeId);
-
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg-deep)" }}>
+    <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg-deep)", width: "100vw" }}>
       {/* Left sidebar */}
       <Sidebar
-        sessions={sortedSessions}
+        sessions={filteredSessions}
         activeId={activeId}
         onSelect={handleSelect}
         onNewChat={handleNewChat}
@@ -290,6 +300,7 @@ export default function Home() {
         onMobileClose={() => setIsMobileOpen(false)}
         userEmail={userEmail ?? undefined}
         agentCount={selectedAgents.length}
+        selectedAgents={selectedAgents}
         onChangeAgents={() => setAuth((prev) => ({ ...prev, stage: "select-agents" }))}
         onLogout={handleLogout}
       />
@@ -309,8 +320,9 @@ export default function Home() {
       ) : (
         <GraphCenter
           searchKeyword={searchKeyword}
-          sessions={sortedSessions}
+          sessions={filteredSessions}
           sessionsLoading={sessionsLoading}
+          onSessionSelect={handleSelect}
         />
       )}
 
