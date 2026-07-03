@@ -55,9 +55,11 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
   const timeRef = useRef<number>(0);
   const searchRef = useRef<string>("");
   const highlightedNodesRef = useRef<Map<number, string>>(new Map());
-  const nodePositionsRef = useRef<Map<number, { x: number; y: number; radius: number }>>(new Map());
+const nodePositionsRef = useRef<Map<number, { x: number; y: number; radius: number }>>(new Map());
+  const initSizeRef = useRef<{ w: number; h: number }>({ w: 1, h: 1 });
 
   const initNodes = useCallback((w: number, h: number) => {
+    initSizeRef.current = { w, h };
     const cx = w / 2;
     const cy = h / 2;
     const nodes: Node[] = [];
@@ -117,13 +119,22 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
     if (!ctx) return;
 
     const resize = () => {
-      canvas.width = canvas.offsetWidth * window.devicePixelRatio;
-      canvas.height = canvas.offsetHeight * window.devicePixelRatio;
+      const w = canvas.offsetWidth;
+      const h = canvas.offsetHeight;
+      if (w === 0 || h === 0) return;
+      canvas.width = w * window.devicePixelRatio;
+      canvas.height = h * window.devicePixelRatio;
       ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-      initNodes(canvas.offsetWidth, canvas.offsetHeight);
+      if (nodesRef.current.length === 0) {
+        initNodes(w, h);
+      }
     };
 
     resize();
+
+    // ResizeObserver fires on ANY layout change (flex, panel open/close, window resize)
+    const observer = new ResizeObserver(() => resize());
+    observer.observe(canvas);
     window.addEventListener("resize", resize);
 
     let lastTime = performance.now();
@@ -148,6 +159,7 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
 
       // Update positions
       const globalRot = t * 0.04;
+      const orbitScale = Math.min(W / initSizeRef.current.w, H / initSizeRef.current.h);
       for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i];
 
@@ -159,7 +171,7 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
         if (node.orbitRadius > 0) {
           node.orbitPhase += node.orbitSpeed * dt;
           const wobble = Math.sin(t * 0.3 + node.pulsePhase) * 0.18;
-          const effectiveRadius = node.orbitRadius * (1 + wobble * 0.1);
+          const effectiveRadius = node.orbitRadius * orbitScale * (1 + wobble * 0.1);
           node.x = cx + Math.cos(node.orbitPhase + globalRot) * effectiveRadius;
           node.y = cy + Math.sin(node.orbitPhase + globalRot) * effectiveRadius * (0.55 + Math.abs(Math.sin(t * 0.15 + node.pulsePhase)) * 0.15);
         } else {
@@ -228,11 +240,11 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
           ctx.arc(node.x, node.y, node.radius * 2 + 2, 0, Math.PI * 2);
           ctx.stroke();
 
-          // Track for click detection — use full glow radius so the whole circle is clickable
+          // Track for click detection — minimum 18px so small nodes are easy to tap
           nodePositionsRef.current.set(node.id, {
             x: node.x,
             y: node.y,
-            radius: glowRadius + 4,
+            radius: Math.max(glowRadius + 4, 18),
           });
         }
 
@@ -267,6 +279,7 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
 
     return () => {
       cancelAnimationFrame(frameRef.current);
+      observer.disconnect();
       window.removeEventListener("resize", resize);
     };
   }, [initNodes]);
@@ -281,7 +294,7 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
     highlightedNodesRef.current = highlightedNodes ?? new Map();
   }, [highlightedNodes]);
 
-  // Returns the nodeId under the mouse, or null
+// Returns the nodeId under the mouse, or null
   const hitTest = useCallback((e: React.MouseEvent<HTMLCanvasElement>): number | null => {
     const canvas = canvasRef.current;
     if (!canvas) return null;

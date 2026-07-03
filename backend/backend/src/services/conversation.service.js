@@ -4,20 +4,26 @@ const logger = require('../utils/logger');
 class ConversationService {
   async createOrUpdate(data) {
     const { platform, external_id, title, messages, saved_at, captured_at, url } = data;
-    
+
     logger.info(`DEBUG: [BEFORE DB SAVE] ExternalId: ${external_id}, Platform: ${platform}`);
 
-    // Normalize field names from extension payload
     const normalizedPlatform = platform ? platform.toLowerCase() : 'chatgpt';
+
+    const newMessages = (messages || []).map(m => ({
+      role: m.role,
+      content: m.content || '',
+      timestamp: m.timestamp || new Date().toISOString()
+    }));
+
+    // Only overwrite existing messages if the new capture has actual content.
+    // Re-imports that fire while the page is still loading can send empty content
+    // and would otherwise destroy the previously captured text.
+    const newHasContent = newMessages.some(m => (m.content || '').trim().length > 0);
+
     const conversationData = {
       externalId: external_id,
       platform: normalizedPlatform,
       title: title || 'Untitled Conversation',
-      messages: (messages || []).map(m => ({
-        role: m.role,
-        content: m.content,
-        timestamp: m.timestamp || new Date().toISOString()
-      })),
       error: null,
       metadata: {
         savedAtExtension: saved_at || captured_at,
@@ -25,13 +31,22 @@ class ConversationService {
       }
     };
 
+    // messages must appear in $set OR $setOnInsert — never both (MongoDB rejects that)
+    if (newHasContent) {
+      conversationData.messages = newMessages;
+    }
+
+    const setOnInsert = { status: 'PENDING' };
+    if (!newHasContent) {
+      setOnInsert.messages = newMessages;
+    }
+
     try {
       const result = await Conversation.findOneAndUpdate(
         { externalId: external_id, platform: normalizedPlatform },
         {
           $set: conversationData,
-          // Only set status to PENDING on first insert — don't reset COMPLETED conversations
-          $setOnInsert: { status: 'PENDING' }
+          $setOnInsert: setOnInsert,
         },
         { upsert: true, returnDocument: 'after', runValidators: true }
       );

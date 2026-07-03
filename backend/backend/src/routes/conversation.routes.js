@@ -8,6 +8,9 @@ router.get('/',             controller.listConversations);
 router.get('/:id',          controller.getConversationById);
 router.get('/:id/status',   controller.getConversationStatus);
 
+// Memory search — no auth required
+router.post('/search',      controller.searchConversations);
+
 // Write endpoints — require API key
 router.post('/',      auth, controller.createConversation);
 router.post('/bulk',  auth, controller.bulkCreateConversations);

@@ -9,18 +9,17 @@ export interface SearchRecord {
   count: number;
   firstAt: number;
   lastAt: number;
+  summary?: string;
 }
 
 interface RightPanelProps {
   searchKeyword: string;
   onSearchChange: (kw: string) => void;
+  onOpenPanel?: () => void;
   searchHistory: SearchRecord[];
   onHistoryUpdate: (record: SearchRecord) => void;
   onForgetPast: () => void;
 }
-
-const CATEGORY_LABELS = ["ChatGPT", "Claude AI", "Gemini", "Copilot", "Perplexity", "Grok", "DeepSeek", "Blackbox"];
-const CATEGORY_COLORS = ["#10a37f", "#f97316", "#3b82f6", "#8b5cf6", "#14b8a6", "#ef4444", "#06b6d4", "#22c55e"];
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
@@ -39,21 +38,14 @@ function ordinal(n: number): string {
   return `${n}th search`;
 }
 
-function categoryForKeyword(kw: string): number {
-  let hash = 0;
-  for (let i = 0; i < kw.length; i++) hash = (hash * 31 + kw.charCodeAt(i)) & 0xffff;
-  return hash % CATEGORY_LABELS.length;
-}
-
 export function RightPanel({
   searchKeyword,
   onSearchChange,
+  onOpenPanel,
   searchHistory,
   onHistoryUpdate,
   onForgetPast,
 }: RightPanelProps) {
-  const [selectedRecord, setSelectedRecord] = useState<SearchRecord | null>(null);
-  const [showMsg, setShowMsg] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastCommitted = useRef<string>("");
@@ -85,20 +77,15 @@ export function RightPanel({
   const activeKw = searchKeyword.trim().toLowerCase();
 
   function handleRecordClick(record: SearchRecord) {
-    setSelectedRecord(record);
-    setShowMsg(true);
     onSearchChange(record.keyword);
+    onOpenPanel?.();
   }
 
   function handleForgetConfirmed() {
     onForgetPast();
-    setSelectedRecord(null);
-    setShowMsg(false);
     setShowConfirm(false);
     lastCommitted.current = "";
   }
-
-  const cat = selectedRecord ? categoryForKeyword(selectedRecord.keyword) : 0;
 
   return (
     <div
@@ -180,49 +167,6 @@ export function RightPanel({
       <div className="flex-1 overflow-y-auto p-3">
         <AnimatePresence mode="popLayout">
 
-          {showMsg && selectedRecord && (
-            <motion.div
-              key="detail-msg"
-              initial={{ opacity: 0, y: -8, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -8, scale: 0.97 }}
-              transition={{ duration: 0.2 }}
-              className="mb-3 p-3 rounded-xl relative"
-              style={{
-                background: "var(--bg-surface)",
-                border: `1px solid ${CATEGORY_COLORS[cat]}44`,
-                boxShadow: `0 0 18px ${CATEGORY_COLORS[cat]}22`,
-              }}
-            >
-              <button
-                onClick={() => setShowMsg(false)}
-                className="absolute top-2.5 right-2.5"
-                style={{ color: "var(--text-muted)" }}
-              >
-                <X size={13} />
-              </button>
-              <div className="flex items-center gap-2 mb-2">
-                <span
-                  className="w-2 h-2 rounded-full flex-shrink-0"
-                  style={{ background: CATEGORY_COLORS[cat], boxShadow: `0 0 6px ${CATEGORY_COLORS[cat]}` }}
-                />
-                <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: CATEGORY_COLORS[cat] }}>
-                  {CATEGORY_LABELS[cat]}
-                </span>
-              </div>
-              <p className="text-[13px] font-medium mb-1" style={{ color: "var(--text-primary)" }}>
-                Nodes highlighted for &ldquo;{selectedRecord.keyword}&rdquo;
-              </p>
-              <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-                You&apos;ve explored this topic{" "}
-                <strong style={{ color: "var(--text-primary)" }}>{selectedRecord.count}×</strong> — first{" "}
-                {timeAgo(selectedRecord.firstAt)}, most recently {timeAgo(selectedRecord.lastAt)}.
-                The graph is now highlighting related memory nodes in the{" "}
-                <span style={{ color: CATEGORY_COLORS[cat] }}>{CATEGORY_LABELS[cat]}</span> cluster.
-              </p>
-            </motion.div>
-          )}
-
           {recommendations.length > 0 && (
             <motion.div key="recs" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
               <div className="flex items-center gap-1.5 mb-2 px-1">
@@ -244,7 +188,6 @@ export function RightPanel({
                   .slice(0, 6)
                   .map((record, idx) => {
                     const isActive = record.keyword === activeKw;
-                    const c = categoryForKeyword(record.keyword);
                     return (
                       <motion.button
                         key={record.keyword}
@@ -255,14 +198,14 @@ export function RightPanel({
                         className="w-full text-left px-3 py-2.5 rounded-xl flex items-center gap-3 group transition-all"
                         style={{
                           background: isActive ? "var(--bg-hover)" : "var(--bg-surface)",
-                          border: `1px solid ${isActive ? CATEGORY_COLORS[c] + "55" : "var(--border-subtle)"}`,
+                          border: `1px solid ${isActive ? "rgba(79,138,255,0.4)" : "var(--border-subtle)"}`,
                         }}
                       >
                         <span
                           className="w-2 h-2 rounded-full flex-shrink-0"
                           style={{
-                            background: CATEGORY_COLORS[c],
-                            boxShadow: `0 0 5px ${CATEGORY_COLORS[c]}`,
+                            background: "#4f8aff",
+                            boxShadow: "0 0 5px #4f8aff88",
                           }}
                         />
                         <div className="flex-1 min-w-0">
@@ -275,6 +218,11 @@ export function RightPanel({
                               {ordinal(record.count)} · {timeAgo(record.lastAt)}
                             </span>
                           </div>
+                          {record.summary && (
+                            <p className="text-[10.5px] mt-1.5 leading-snug line-clamp-3" style={{ color: "var(--text-secondary)" }}>
+                              {record.summary}
+                            </p>
+                          )}
                         </div>
                         <ChevronRight
                           size={13}

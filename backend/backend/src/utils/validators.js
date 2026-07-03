@@ -23,12 +23,24 @@ function validateMetadata(metadata) {
     metadata.summary = metadata.topic;
   }
 
-  if (!Array.isArray(metadata.keywords) || metadata.keywords.length === 0) {
-    metadata.keywords = [metadata.topic];
+  if (!Array.isArray(metadata.keywords)) {
+    // model returned a string like "word1 word2 word3" — split into array
+    if (typeof metadata.keywords === 'string' && metadata.keywords.trim()) {
+      metadata.keywords = metadata.keywords.split(/[\s,]+/).filter(Boolean);
+    } else {
+      metadata.keywords = metadata.topic ? [metadata.topic] : [];
+    }
+  }
+  if (metadata.keywords.length === 0) {
+    metadata.keywords = metadata.topic ? [metadata.topic] : [];
   }
 
   if (!Array.isArray(metadata.entities)) {
-    metadata.entities = [];
+    if (typeof metadata.entities === 'string' && metadata.entities.trim()) {
+      metadata.entities = metadata.entities.split(/[\s,]+/).filter(Boolean);
+    } else {
+      metadata.entities = [];
+    }
   }
 
   const score = Number(metadata.importance_score);

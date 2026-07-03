@@ -234,7 +234,6 @@ document.getElementById('btnBulkImport').addEventListener('click', async () => {
         }
 
       console.log('[Brain Shadow] Bulk import complete, saved:', savedCount);
-      // sendBulkStatus('done', { count: savedCount, total: chatUrls.length });
       isBulkRunning = false;
       document.getElementById('btnBulkImport').disabled = false;
       document.getElementById('btnBulkImport').textContent = '⚡ Bulk Import All Past Chats';
@@ -243,6 +242,7 @@ document.getElementById('btnBulkImport').addEventListener('click', async () => {
       loadStats();
       loadRecentConversations();
       setTimeout(hideProgress, 4000);
+      await syncAllToBackend();
     })();
   });
 });
@@ -343,9 +343,20 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
+// ── Sync all local conversations to backend ────────────────
+async function syncAllToBackend() {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'SYNC_ALL_TO_BACKEND' });
+    if (result?.synced > 0) showToast(`Synced ${result.synced} chats to backend`, 'success');
+  } catch (e) {
+    console.warn('[Brain Shadow] Auto-sync failed:', e.message);
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────
 (async () => {
   await loadStats();
   await loadRecentConversations();
   await loadBackendUrl();
+  await syncAllToBackend();
 })();

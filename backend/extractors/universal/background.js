@@ -347,6 +347,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.get(BACKEND_KEY).then(r => sendResponse({ url: r[BACKEND_KEY] || DEFAULT_BACKEND })); return true;
   }
   if (message.type === 'TEST_BACKEND') { testBackend(message.url).then(sendResponse); return true; }
+
+  // Sync ALL local conversations to backend (runs in SW — survives popup close)
+  if (message.type === 'SYNC_ALL_TO_BACKEND') {
+    (async () => {
+      const r          = await chrome.storage.local.get([STORAGE_KEY, BACKEND_KEY]);
+      const convs      = Object.values(r[STORAGE_KEY] || {});
+      const backendUrl = (r[BACKEND_KEY] || DEFAULT_BACKEND).replace(/\/$/, '');
+      let synced = 0, failed = 0;
+      for (const conv of convs) {
+        const result = await syncToBackend(conv).catch(err => ({ ok: false, error: err.message }));
+        if (result.ok) {
+          synced++;
+        } else {
+          failed++;
+          console.warn(`[Brain Shadow] Sync failed for "${conv.title}" (${conv.platform}):`, result.error);
+        }
+      }
+      console.log(`[Brain Shadow] SYNC_ALL_TO_BACKEND: ${synced}/${convs.length} synced, ${failed} failed`);
+      sendResponse({ synced, failed, total: convs.length });
+    })();
+    return true;
+  }
 });
 
 // Clear stale "running" sessions on SW restart
@@ -360,5 +382,22 @@ chrome.storage.local.get(PROGRESS_KEY).then(r => {
   chrome.storage.local.set({ [PROGRESS_KEY]: cleaned });
   chrome.action.setBadgeText({ text: '' });
 });
+
+// On every SW startup: push all locally stored conversations to backend
+(async () => {
+  try {
+    const r          = await chrome.storage.local.get([STORAGE_KEY, BACKEND_KEY]);
+    const convs      = Object.values(r[STORAGE_KEY] || {});
+    if (!convs.length) return;
+    const backendUrl = (r[BACKEND_KEY] || DEFAULT_BACKEND).replace(/\/$/, '');
+    // Test backend first
+    const health = await fetch(`${backendUrl}/health`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
+    if (!health?.ok) return;
+    for (const conv of convs) {
+      await syncToBackend(conv).catch(() => {});
+    }
+    console.log(`[Brain Shadow] Startup sync: pushed ${convs.length} conversations`);
+  } catch {}
+})();
 
 console.log('[Brain Shadow] Universal background service worker started');
