@@ -615,35 +615,11 @@ onNodeClick={handleNodeClick}
                                         {label}
                                       </span>
                                     )}
-                                    {src.role && (
-                                      <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)", color: "var(--text-muted)" }}>
-                                        {src.role === "user" ? "You" : "AI"}
-                                      </span>
-                                    )}
-                                    {src.date && (
-                                      <span className="flex items-center gap-1 text-[9px]" style={{ color: "var(--text-muted)" }}>
-                                        <Clock size={8} />
-                                        {src.date}
-                                      </span>
-                                    )}
                                   </div>
-                                  {src.snippet && (
+                                  {(src.summary || src.snippet) && (
                                     <p className="text-[10px] leading-relaxed mt-1.5 line-clamp-3" style={{ color: "var(--text-secondary)" }}>
-                                      {src.snippet}
+                                      {src.summary || src.snippet}
                                     </p>
-                                  )}
-                                  {src.keywords && src.keywords.length > 0 && (
-                                    <div className="flex flex-wrap gap-1 mt-1.5">
-                                      {src.keywords.slice(0, 5).map((kw) => (
-                                        <span
-                                          key={kw}
-                                          className="text-[9px] px-1.5 py-0.5 rounded-full"
-                                          style={{ background: `${color}15`, color: "var(--text-muted)", border: `1px solid ${color}20` }}
-                                        >
-                                          {kw}
-                                        </span>
-                                      ))}
-                                    </div>
                                   )}
                                 </div>
                               );

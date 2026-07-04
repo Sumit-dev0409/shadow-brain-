@@ -7,6 +7,7 @@ import {
   Loader2, KeyRound, ArrowLeft, ShieldCheck,
 } from "lucide-react";
 import { Logo } from "./Logo";
+import { GoogleSignInButton } from "./GoogleSignInButton";
 import {
   checkPassword,
   isEmailValid,
@@ -17,7 +18,9 @@ import {
   saveRememberMe,
   clearRememberMe,
   getSavedEmail,
+  setSession,
 } from "@/app/lib/auth";
+import { googleLogin } from "@/app/lib/api";
 
 interface AuthScreenProps {
   onAuthenticated: (email: string) => void;
@@ -150,6 +153,21 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
     }
 
     onAuthenticated(result.email);
+  }
+
+  // ── Google sign-in ───────────────────────────────────────────────────────
+  async function handleGoogleCredential(credential: string) {
+    setError(null);
+    setLoading(true);
+    try {
+      const user = await googleLogin(credential);
+      setSession(user.email);
+      onAuthenticated(user.email);
+    } catch {
+      setError("Google sign-in failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   // ── Forgot password — request code ──────────────────────────────────────
@@ -411,6 +429,14 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                   {m === "login" ? "Log in" : "Sign up"}
                 </button>
               ))}
+            </div>
+
+            <GoogleSignInButton onCredential={handleGoogleCredential} />
+
+            <div className="flex items-center gap-3 my-4">
+              <div className="flex-1 h-px" style={{ background: "var(--border-subtle)" }} />
+              <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>or</span>
+              <div className="flex-1 h-px" style={{ background: "var(--border-subtle)" }} />
             </div>
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">

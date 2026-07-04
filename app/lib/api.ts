@@ -93,6 +93,23 @@ export async function searchMemory(query: string, platforms?: string[]): Promise
   }
 }
 
+export interface GoogleAuthUser {
+  email: string;
+  name?: string;
+  avatar?: string;
+}
+
+export async function googleLogin(credential: string): Promise<GoogleAuthUser> {
+  const res = await fetch(`${API_BASE}/api/auth/google`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ credential }),
+  });
+  if (!res.ok) throw new Error('Google sign-in failed');
+  return res.json();
+}
+
 export async function saveConversation(data: {
   external_id: string;
   platform: string;
