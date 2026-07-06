@@ -83,6 +83,160 @@ function sessionToNodeId(sessionId: string): number {
   return 8 + (h % 992);
 }
 
+function ConversationSessionCard({
+  session,
+  searchKeyword,
+  filterMessagesByKeyword = false,
+}: {
+  session: ChatSession;
+  searchKeyword: string;
+  filterMessagesByKeyword?: boolean;
+}) {
+  const hasAnyContent = session.messages.some(m => (m.content || "").trim().length > 0);
+  const platformColor = session.platform ? PLATFORM_COLORS[session.platform] ?? "#4f8aff" : "#4f8aff";
+  const visibleMessages = filterMessagesByKeyword
+    ? session.messages.filter((msg: Message) => {
+        const content = (msg.content || "").trim();
+        return content && content.toLowerCase().includes(searchKeyword.toLowerCase());
+      })
+    : session.messages;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className="rounded-xl overflow-hidden"
+      style={{
+        background: "rgba(15,20,40,0.8)",
+        border: "1px solid var(--border-subtle)",
+      }}
+    >
+      <div
+        className="flex items-center justify-between px-3 py-2.5"
+        style={{ background: "rgba(79,138,255,0.06)", borderBottom: "1px solid var(--border-subtle)" }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: platformColor }} />
+          <p className="text-[12px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>
+            {session.title}
+          </p>
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+          {session.platform && PLATFORM_LABELS[session.platform] && (
+            <span
+              className="text-[9px] font-semibold px-1.5 py-0.5 rounded"
+              style={{
+                background: `${platformColor}18`,
+                color: platformColor,
+                border: `1px solid ${platformColor}33`,
+              }}
+            >
+              {PLATFORM_LABELS[session.platform]}
+            </span>
+          )}
+          <div className="flex items-center gap-1 ml-1">
+            <Clock size={9} style={{ color: "var(--text-muted)" }} />
+            <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>
+              {fmtDate(session.createdAt)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {(session.summary || session.topic || (session.keywords && session.keywords.length > 0)) && (
+        <div
+          className="px-3 py-2.5"
+          style={{ background: `${platformColor}08`, borderBottom: "1px solid var(--border-subtle)" }}
+        >
+          {session.topic && (
+            <p className="text-[10px] font-semibold mb-1" style={{ color: platformColor }}>
+              {session.topic}
+            </p>
+          )}
+          {session.summary && (
+            <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+              {session.summary}
+            </p>
+          )}
+          {session.keywords && session.keywords.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {session.keywords.slice(0, 6).map((kw) => (
+                <span
+                  key={kw}
+                  className="text-[9px] px-1.5 py-0.5 rounded-full"
+                  style={{
+                    background: `${platformColor}18`,
+                    color: "var(--text-secondary)",
+                    border: `1px solid ${platformColor}22`,
+                  }}
+                >
+                  {kw}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {session.messages.length === 0 ? (
+        <div className="px-4 py-6 text-center">
+          <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>No messages recorded.</p>
+        </div>
+      ) : !hasAnyContent ? (
+        <div className="px-4 py-5 text-center">
+          <p className="text-[11px] mb-1" style={{ color: "var(--text-muted)" }}>
+            {session.messages.length} message{session.messages.length !== 1 ? "s" : ""} — content not captured
+          </p>
+          <p className="text-[10px]" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+            The conversation was indexed for search but full text was not stored.
+          </p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3 p-3">
+          {visibleMessages.map((msg: Message) => {
+            const content = (msg.content || "").trim();
+            const isUser = msg.role === "user";
+            return (
+              <div key={msg.id} className="flex gap-2" style={{ flexDirection: isUser ? "row-reverse" : "row" }}>
+                <div
+                  className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-[8px] font-bold"
+                  style={{
+                    background: isUser ? "linear-gradient(135deg,#4f8aff,#8b5cf6)" : platformColor,
+                    color: "#fff",
+                    marginTop: 2,
+                    boxShadow: isUser ? "0 0 8px rgba(79,138,255,0.3)" : "none",
+                  }}
+                >
+                  {isUser ? "U" : (session.platform ? PLATFORM_ABBR[session.platform] ?? "AI" : "AI")}
+                </div>
+                <div
+                  className="rounded-xl px-3 py-2 min-w-0"
+                  style={{
+                    maxWidth: "calc(100% - 32px)",
+                    background: isUser ? "rgba(79,138,255,0.12)" : "rgba(255,255,255,0.04)",
+                    border: `1px solid ${isUser ? "rgba(79,138,255,0.2)" : "var(--border-subtle)"}`,
+                    boxShadow: "none",
+                  }}
+                >
+                  <div className="max-h-[200px] overflow-y-auto scrollable-area">
+                    <p className="text-[12px] leading-relaxed" style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                      {content}
+                    </p>
+                  </div>
+                  <p className="text-[9px] mt-1" style={{ color: "var(--text-muted)", textAlign: isUser ? "right" : "left" }}>
+                    {fmtTime(msg.timestamp)}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
 interface SearchResultsPanelProps {
   displayedSessions: ChatSession[];
   searchKeyword: string;
@@ -278,150 +432,16 @@ function SearchResultsPanel({
             </div>
           ) : (
             <div className="flex flex-col gap-5">
-              {displayedSessions.map((session, sIdx) => {
-                const hasAnyContent = session.messages.some(m => (m.content || "").trim().length > 0);
-                const platformColor = session.platform ? PLATFORM_COLORS[session.platform] ?? "#4f8aff" : "#4f8aff";
-                return (
-                  <motion.div
-                    key={session.id}
-                    initial={{ opacity: 0, y: 12 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: sIdx * 0.05 }}
-                    className="rounded-xl overflow-hidden"
-                    style={{
-                      background: "rgba(15,20,40,0.8)",
-                      border: "1px solid var(--border-subtle)",
-                    }}
-                  >
-                    {displayedSessions.length > 1 && (
-                      <div
-                        className="flex items-center justify-between px-3 py-2.5"
-                        style={{ background: "rgba(79,138,255,0.06)", borderBottom: "1px solid var(--border-subtle)" }}
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: platformColor }} />
-                          <p className="text-[12px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>
-                            {session.title}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-1 flex-shrink-0 ml-2">
-                          {session.platform && PLATFORM_LABELS[session.platform] && (
-                            <span
-                              className="text-[9px] font-semibold px-1.5 py-0.5 rounded"
-                              style={{
-                                background: `${platformColor}18`,
-                                color: platformColor,
-                                border: `1px solid ${platformColor}33`,
-                              }}
-                            >
-                              {PLATFORM_LABELS[session.platform]}
-                            </span>
-                          )}
-                          <div className="flex items-center gap-1 ml-1">
-                            <Clock size={9} style={{ color: "var(--text-muted)" }} />
-                            <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>
-                              {fmtDate(session.createdAt)}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {(session.summary || session.topic || (session.keywords && session.keywords.length > 0)) && (
-                      <div
-                        className="px-3 py-2.5"
-                        style={{ background: `${platformColor}08`, borderBottom: "1px solid var(--border-subtle)" }}
-                      >
-                        {session.topic && (
-                          <p className="text-[10px] font-semibold mb-1" style={{ color: platformColor }}>
-                            {session.topic}
-                          </p>
-                        )}
-                        {session.summary && (
-                          <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-                            {session.summary}
-                          </p>
-                        )}
-                        {session.keywords && session.keywords.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1.5">
-                            {session.keywords.slice(0, 6).map((kw) => (
-                              <span
-                                key={kw}
-                                className="text-[9px] px-1.5 py-0.5 rounded-full"
-                                style={{
-                                  background: `${platformColor}18`,
-                                  color: "var(--text-secondary)",
-                                  border: `1px solid ${platformColor}22`,
-                                }}
-                              >
-                                {kw}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {session.messages.length === 0 ? (
-                      <div className="px-4 py-6 text-center">
-                        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>No messages recorded.</p>
-                      </div>
-                    ) : !hasAnyContent ? (
-                      <div className="px-4 py-5 text-center">
-                        <p className="text-[11px] mb-1" style={{ color: "var(--text-muted)" }}>
-                          {session.messages.length} message{session.messages.length !== 1 ? "s" : ""} — content not captured
-                        </p>
-                        <p className="text-[10px]" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
-                          The conversation was indexed for search but full text was not stored.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-3 p-3">
-                        {session.messages.filter((msg: Message) => {
-                          const content = (msg.content || "").trim();
-                          return content && content.toLowerCase().includes(searchKeyword.toLowerCase());
-                        }).map((msg: Message) => {
-                          const content = (msg.content || "").trim();
-                          const isUser = msg.role === "user";
-                          return (
-                            <div key={msg.id} className="flex gap-2" style={{ flexDirection: isUser ? "row-reverse" : "row" }}>
-                              <div
-                                className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-[8px] font-bold"
-                                style={{
-                                  background: isUser ? "linear-gradient(135deg,#4f8aff,#8b5cf6)" : platformColor,
-                                  color: "#fff",
-                                  marginTop: 2,
-                                  boxShadow: isUser ? "0 0 8px rgba(79,138,255,0.3)" : "none",
-                                }}
-                              >
-                                {isUser ? "U" : (session.platform ? PLATFORM_ABBR[session.platform] ?? "AI" : "AI")}
-                              </div>
-                              <div
-                                className="rounded-xl px-3 py-2 min-w-0"
-                                style={{
-                                  maxWidth: "calc(100% - 32px)",
-                                  background: isUser ? "rgba(79,138,255,0.12)" : "rgba(255,255,255,0.04)",
-                                  border: `1px solid ${isUser ? "rgba(79,138,255,0.2)" : "var(--border-subtle)"}`,
-                                  boxShadow: "none",
-                                }}
-                              >
-                                <div className="max-h-[200px] overflow-y-auto scrollable-area">
-                                  <p className="text-[12px] leading-relaxed" style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                                    {content}
-                                  </p>
-                                </div>
-                                <p className="text-[9px] mt-1" style={{ color: "var(--text-muted)", textAlign: isUser ? "right" : "left" }}>
-                                  {fmtTime(msg.timestamp)}
-                                </p>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </motion.div>
-                );
-              })}
+              {displayedSessions.map((session, sIdx) => (
+                <motion.div
+                  key={session.id}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: sIdx * 0.05 }}
+                >
+                  <ConversationSessionCard session={session} searchKeyword={searchKeyword} filterMessagesByKeyword={true} />
+                </motion.div>
+              ))}
             </div>
           )}
         </div>
@@ -507,6 +527,8 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
   const [pinnedNodeId, setPinnedNodeId] = useState<number | null>(null);
   const [clickedSessions, setClickedSessions] = useState<ChatSession[]>([]);
   const [panelDismissed, setPanelDismissed] = useState(false);
+  const [selectedConversation, setSelectedConversation] = useState<ChatSession | null>(null);
+  const [isConversationPopupOpen, setConversationPopupOpen] = useState(false);
 
   // Force-open panel when a history item is clicked (even if same keyword)
   useEffect(() => {
@@ -697,12 +719,16 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
     };
   }, [searchTriggerKey, kw, searchKeyword, selectedAgents, onAiSourcesChange, onAiAnswerReady, onAiLoadingChange]);
 
-  // Clicking a node: pin to that node's sessions
+  // Clicking a node: pin to that node's sessions and open the conversation popup.
   const handleNodeClick = useCallback((nodeId: number, _keyword: string) => {
     const found = nodeSessionsMapRef.current.get(nodeId) ?? [];
     setClickedSessions(found);
     setPinnedNodeId(nodeId);
     setPanelDismissed(false);
+    if (found.length > 0) {
+      setSelectedConversation(found[0]);
+      setConversationPopupOpen(true);
+    }
   }, []);
 
   // Unpin — go back to showing all matches
@@ -756,6 +782,17 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
   useEffect(() => {
     onResultsPanelContentChange?.(resultsPanelContent);
   }, [resultsPanelContent, onResultsPanelContentChange]);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setConversationPopupOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, []);
 
   return (
     <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden" style={{ background: "var(--bg-deep)" }}>
@@ -909,6 +946,75 @@ onNodeClick={handleNodeClick}
             Shadow Brain Memory Network · Continuously rotating
           </div>
         )}
+
+        <AnimatePresence>
+          {isConversationPopupOpen && selectedConversation && (
+            <motion.div
+              key="conversation-popup"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.25 }}
+              className="absolute inset-0 z-50 flex items-center justify-center p-3 sm:p-6 lg:p-8"
+              style={{ background: "rgba(2,4,10,0.76)", backdropFilter: "blur(8px)" }}
+              onClick={() => setConversationPopupOpen(false)}
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.96, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.96, y: 8 }}
+                transition={{ duration: 0.25 }}
+                className="relative w-full h-full max-w-5xl max-h-[88vh] rounded-2xl overflow-hidden"
+                style={{
+                  background: "rgba(7,9,15,0.96)",
+                  border: "1px solid var(--border-subtle)",
+                  boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
+                }}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div
+                  className="flex items-center justify-between px-4 py-3 sm:px-5 sm:py-4"
+                  style={{ borderBottom: "1px solid var(--border-subtle)", background: "rgba(10,14,28,0.92)" }}
+                >
+                  <div className="min-w-0 pr-3">
+                    <p className="text-[13px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>
+                      {selectedConversation.title}
+                    </p>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      {selectedConversation.platform && PLATFORM_LABELS[selectedConversation.platform] && (
+                        <span
+                          className="text-[9px] font-semibold px-1.5 py-0.5 rounded"
+                          style={{
+                            background: `${PLATFORM_COLORS[selectedConversation.platform] ?? "#4f8aff"}18`,
+                            color: PLATFORM_COLORS[selectedConversation.platform] ?? "#4f8aff",
+                            border: `1px solid ${(PLATFORM_COLORS[selectedConversation.platform] ?? "#4f8aff")}33`,
+                          }}
+                        >
+                          {PLATFORM_LABELS[selectedConversation.platform]}
+                        </span>
+                      )}
+                      <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                        {fmtDate(selectedConversation.createdAt)}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setConversationPopupOpen(false)}
+                    className="p-2 rounded-lg flex-shrink-0"
+                    style={{ color: "var(--text-muted)", background: "rgba(255,255,255,0.04)" }}
+                    aria-label="Close conversation"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div className="h-[calc(100%-57px)] overflow-y-auto px-4 py-4 sm:px-5 sm:py-5">
+                  <ConversationSessionCard session={selectedConversation} searchKeyword="" filterMessagesByKeyword={false} />
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
       </div>
     </div>
