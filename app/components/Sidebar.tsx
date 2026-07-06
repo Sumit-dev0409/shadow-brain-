@@ -155,7 +155,7 @@ function AgentHistory({
     const meta = PLATFORM_META[agentId];
     const agentSessions = groups[0]?.sessions ?? sessions;
     return (
-      <div className="px-3 mb-2 flex flex-col gap-0.5 overflow-y-auto" style={{ maxHeight: "calc(100vh - 260px)" }}>
+      <div className="px-3 mb-2 flex flex-col gap-0.5">
         {meta && (
           <div className="flex items-center gap-2 px-1 mb-1">
             <span
@@ -179,7 +179,7 @@ function AgentHistory({
 
   // Multiple agents: collapsible container per agent
   return (
-    <div className="px-3 mb-2 flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: "calc(100vh - 260px)" }}>
+    <div className="px-3 mb-2 flex flex-col gap-2">
       {groups.map(({ id, sessions: groupSessions }) => {
         if (groupSessions.length === 0) return null;
         const meta = id === "__other__" ? null : PLATFORM_META[id];
@@ -330,16 +330,18 @@ export function Sidebar({
       </div>
 
       {/* History — grouped by agent when multiple selected */}
-      <AgentHistory
-        sessions={sessions}
-        activeId={activeId}
-        selectedAgents={selectedAgents}
-        collapsed={collapsed}
-        onToggleCollapse={(id) => setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))}
-        onSelect={(id) => { onSelect(id); onMobileClose(); }}
-      />
-
-      <div className="flex-1" />
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="h-full min-h-0 overflow-y-auto scrollable-area px-3">
+          <AgentHistory
+            sessions={sessions}
+            activeId={activeId}
+            selectedAgents={selectedAgents}
+            collapsed={collapsed}
+            onToggleCollapse={(id) => setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))}
+            onSelect={(id) => { onSelect(id); onMobileClose(); }}
+          />
+        </div>
+      </div>
 
       {/* Footer */}
       <div className="relative p-3" style={{ borderTop: "1px solid var(--border-subtle)" }}>

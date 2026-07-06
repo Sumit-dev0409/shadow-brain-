@@ -103,6 +103,21 @@ const getConversationStatus = async (req, res, next) => {
   }
 };
 
+const buildFallbackAnswer = (query, scored) => {
+  const topResults = scored.slice(0, 3);
+  const sentences = topResults.map(({ conv }, index) => {
+    const date = conv.createdAt
+      ? new Date(conv.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+      : 'Unknown date';
+    const platform = conv.platform || 'unknown';
+    const summarySource = conv.enrichment?.summary || conv.metadata?.summary;
+    const detail = summarySource || (conv.messages?.[0]?.content || 'The conversation included relevant discussion about your search.').replace(/\s+/g, ' ').slice(0, 140);
+    return `${index + 1}. ${conv.title || 'Untitled'} on ${platform} (${date}) discussed ${detail}`;
+  });
+
+  return `I found ${scored.length} conversation${scored.length === 1 ? '' : 's'} related to "${query}". ${sentences.join(' ')}.`;
+};
+
 const searchConversations = async (req, res, next) => {
   try {
     const { query, platforms } = req.body;
@@ -231,15 +246,7 @@ Write 2-3 plain sentences summarising what was discussed about "${query}". Your 
       answer = result.content;
     } catch (groqErr) {
       logger.error(`[Search] Groq failed: ${groqErr.message}`);
-      answer = `Found ${scored.length} conversation(s) related to "${query}":\n\n` +
-        scored.map(({ conv }) => {
-          const date = conv.createdAt
-            ? new Date(conv.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-            : 'Unknown date';
-          const kws = conv.enrichment?.keywords?.length ? `\n  Keywords: ${conv.enrichment.keywords.join(', ')}` : '';
-          const summary = conv.enrichment?.summary ? `\n  ${conv.enrichment.summary}` : '';
-          return `• **${conv.title || 'Untitled'}** (${conv.platform}, ${date})${summary}${kws}`;
-        }).join('\n\n');
+      answer = buildFallbackAnswer(query, scored);
     }
 
     res.json({ answer, sources });

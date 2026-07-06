@@ -57,7 +57,8 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, nodeDates, onNo
   const timeRef = useRef<number>(0);
   const searchRef = useRef<string>("");
   const highlightedNodesRef = useRef<Map<number, string>>(new Map());
-const nodePositionsRef = useRef<Map<number, { x: number; y: number; radius: number }>>(new Map());
+  const nodeDatesRef = useRef<Map<number, string>>(new Map());
+  const nodePositionsRef = useRef<Map<number, { x: number; y: number; radius: number }>>(new Map());
   const initSizeRef = useRef<{ w: number; h: number }>({ w: 1, h: 1 });
 
   const initNodes = useCallback((w: number, h: number) => {
@@ -329,6 +330,11 @@ const nodePositionsRef = useRef<Map<number, { x: number; y: number; radius: numb
   useEffect(() => {
     highlightedNodesRef.current = highlightedNodes ?? new Map();
   }, [highlightedNodes]);
+
+  // Sync node date labels map
+  useEffect(() => {
+    nodeDatesRef.current = nodeDates ?? new Map();
+  }, [nodeDates]);
 
 // Returns the nodeId under the mouse, or null
   const hitTest = useCallback((e: React.MouseEvent<HTMLCanvasElement>): number | null => {
