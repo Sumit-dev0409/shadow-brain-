@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { RightPanel, SearchRecord } from "./components/RightPanel";
 import { GraphCenter } from "./components/GraphCenter";
@@ -74,6 +74,9 @@ export default function Home() {
   const [searchHistory, setSearchHistory] = useState<SearchRecord[]>([]);
   const [aiSources, setAiSources] = useState<MemorySource[]>([]);
   const [panelResetKey, setPanelResetKey] = useState(0);
+  const [searchTriggerKey, setSearchTriggerKey] = useState(0);
+  const [isMemorySearchLoading, setIsMemorySearchLoading] = useState(false);
+  const [resultsPanelContent, setResultsPanelContent] = useState<ReactNode>(null);
 
   // Track which session IDs have already been saved to backend
   const persistedIds = useRef<Set<string>>(new Set());
@@ -270,6 +273,26 @@ export default function Home() {
     setSearchKeyword("");
   }, []);
 
+  const handleMemorySearchSubmit = useCallback(() => {
+    const trimmed = searchKeyword.trim();
+    if (!trimmed || isMemorySearchLoading) return;
+    setSearchTriggerKey((k) => k + 1);
+    setSearchHistory((prev) => {
+      const existing = prev.find((r) => r.keyword === trimmed.toLowerCase());
+      if (existing) {
+        return [
+          { ...existing, count: existing.count + 1, lastAt: Date.now(), summary: existing.summary },
+          ...prev.filter((r) => r.keyword !== trimmed.toLowerCase()),
+        ];
+      }
+      return [{ keyword: trimmed.toLowerCase(), count: 1, firstAt: Date.now(), lastAt: Date.now() }, ...prev];
+    });
+  }, [searchKeyword, isMemorySearchLoading]);
+
+  const handleMemorySearchLoadingChange = useCallback((loading: boolean) => {
+    setIsMemorySearchLoading(loading);
+  }, []);
+
   // Hooks must be called unconditionally — before any early returns
   const sortedSessions = useMemo(
     () => [...sessions].sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime()),
@@ -337,8 +360,11 @@ export default function Home() {
       ) : (
         <GraphCenter
           searchKeyword={searchKeyword}
+          searchTriggerKey={searchTriggerKey}
           onAiSourcesChange={setAiSources}
           onAiAnswerReady={handleAiAnswerReady}
+          onAiLoadingChange={handleMemorySearchLoadingChange}
+          onResultsPanelContentChange={setResultsPanelContent}
           panelResetKey={panelResetKey}
           sessions={filteredSessions}
           sessionsLoading={sessionsLoading}
@@ -350,10 +376,13 @@ export default function Home() {
       <RightPanel
         searchKeyword={searchKeyword}
         onSearchChange={setSearchKeyword}
+        onSearchSubmit={handleMemorySearchSubmit}
         onOpenPanel={() => setPanelResetKey((k) => k + 1)}
         searchHistory={searchHistory}
         onHistoryUpdate={handleHistoryUpdate}
         onForgetPast={handleForgetPast}
+        isSearchLoading={isMemorySearchLoading}
+        resultsPanelContent={resultsPanelContent}
       />
     </div>
   );

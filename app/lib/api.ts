@@ -1,4 +1,8 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
+
+function toApiUrl(path: string): string {
+  return API_BASE ? `${API_BASE}${path}` : path;
+}
 
 export interface ApiMessage {
   role: 'user' | 'assistant';
@@ -42,7 +46,7 @@ export async function sendChatMessage(
   messages: ApiMessage[],
   systemPrompt?: string,
 ): Promise<{ content: string }> {
-  const res = await fetch(`${API_BASE}/api/chat`, {
+  const res = await fetch(toApiUrl('/api/chat'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages, systemPrompt }),
@@ -53,7 +57,7 @@ export async function sendChatMessage(
 
 export async function fetchConversations(): Promise<ApiConversation[]> {
   try {
-    const res = await fetch(`${API_BASE}/api/conversations?limit=500`);
+    const res = await fetch(toApiUrl('/api/conversations?limit=500'));
     if (!res.ok) return [];
     return res.json();
   } catch {
@@ -74,15 +78,24 @@ export interface MemorySource {
 }
 
 export async function searchMemory(query: string, platforms?: string[]): Promise<{ answer: string; sources: MemorySource[] }> {
+  const url = toApiUrl('/api/conversations/search');
+  console.log('[api.searchMemory] request', { url, query, platforms });
   try {
-    const res = await fetch(`${API_BASE}/api/conversations/search`, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, platforms: platforms && platforms.length > 0 ? platforms : undefined }),
     });
+    console.log('[api.searchMemory] response status', { status: res.status, statusText: res.statusText });
+    const data = await res.json().catch((parseError) => {
+      console.error('[api.searchMemory] failed to parse JSON', parseError);
+      throw parseError;
+    });
+    console.log('[api.searchMemory] parsed response', data);
     if (!res.ok) throw new Error(`Search error ${res.status}`);
-    return res.json();
+    return data;
   } catch (e) {
+    console.error('[api.searchMemory] error', e);
     const isNetworkError = e instanceof TypeError;
     return {
       answer: isNetworkError
@@ -117,7 +130,7 @@ export async function saveConversation(data: {
   messages: ApiMessage[];
 }): Promise<void> {
   try {
-    await fetch(`${API_BASE}/api/import/capture`, {
+    await fetch(toApiUrl('/api/import/capture'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),

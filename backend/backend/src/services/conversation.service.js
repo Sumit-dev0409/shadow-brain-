@@ -68,7 +68,11 @@ class ConversationService {
 
   async updateStatus(id, status, error = null) {
     const update = { status };
-    if (error) update.error = error;
+    if (error === null) {
+      update.error = null;
+    } else if (error) {
+      update.error = error;
+    }
     return await Conversation.findByIdAndUpdate(id, { $set: update }, { returnDocument: 'after' });
   }
 
@@ -96,6 +100,7 @@ class ConversationService {
       'metadata.enriched_at':         enrichment.enriched_at,
       'metadata.enrichment_version':  enrichment.enrichment_version,
       'metadata.status':              'COMPLETED',
+      error: null,
     };
 
     const result = await Conversation.findByIdAndUpdate(
