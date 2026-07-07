@@ -188,8 +188,8 @@ const searchConversations = async (req, res, next) => {
       const topic = conv.enrichment?.topic ? `Topic: ${conv.enrichment.topic}` : '';
       const summary = conv.enrichment?.summary ? `Summary: ${conv.enrichment.summary}` : '';
 
-      // Only include messages that matched the query — up to 10, 500 chars each
-      const msgs = (relevantMsgs.length > 0 ? relevantMsgs : conv.messages).slice(0, 10)
+      // Only include messages that actually matched the query — no fallback to unrelated messages
+      const msgs = relevantMsgs.slice(0, 10)
         .map(m => `${m.role === 'user' ? 'User' : 'AI'}: ${(m.content || '').slice(0, 500)}`)
         .join('\n');
 
@@ -199,7 +199,7 @@ const searchConversations = async (req, res, next) => {
         `Platform: ${conv.platform}`,
         `Date: ${date}`,
         topic, summary,
-        'Relevant messages:',
+        msgs ? 'Relevant messages:' : '',
         msgs,
       ].filter(Boolean).join('\n');
     }).join('\n\n---\n\n');
@@ -214,26 +214,40 @@ ${context}
 
 Write 2-3 plain sentences summarising what was discussed about "${query}". Your response must:
 - Be written in plain English sentences (no markdown, no bullet points, no headers)
-- Mention the platform name (e.g. ChatGPT, Gemini) and date for each conversation referenced
+- Mention the platform name (e.g. ChatGPT, Gemini) for each conversation referenced
 - Only describe what was actually in the messages shown above
 - Not include steps, code, or detailed explanations`;
 
-    // Message-level sources: one entry per matched message
+    // Message-level sources: one entry per matched message — no fallback to unrelated messages
     const sources = [];
     for (const { conv, relevantMsgs } of scored) {
       const date = conv.createdAt
         ? new Date(conv.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
         : null;
-      const msgsToShow = relevantMsgs.length > 0 ? relevantMsgs : conv.messages.slice(0, 3);
-      for (const msg of msgsToShow.slice(0, 4)) {
+      if (relevantMsgs.length > 0) {
+        for (const msg of relevantMsgs.slice(0, 4)) {
+          sources.push({
+            id: msg._id?.toString() || conv._id.toString(),
+            convId: conv._id.toString(),
+            title: conv.title || 'Untitled',
+            platform: conv.platform || 'unknown',
+            date,
+            role: msg.role,
+            snippet: (msg.content || '').slice(0, 200),
+            keywords: conv.enrichment?.keywords || [],
+            summary: conv.enrichment?.summary || null,
+          });
+        }
+      } else {
+        // Conversation matched on title/topic/summary/keywords only — no single message to point to
         sources.push({
-          id: msg._id?.toString() || conv._id.toString(),
+          id: conv._id.toString(),
           convId: conv._id.toString(),
           title: conv.title || 'Untitled',
           platform: conv.platform || 'unknown',
           date,
-          role: msg.role,
-          snippet: (msg.content || '').slice(0, 200),
+          role: null,
+          snippet: null,
           keywords: conv.enrichment?.keywords || [],
           summary: conv.enrichment?.summary || null,
         });
