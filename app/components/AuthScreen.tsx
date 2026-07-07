@@ -230,7 +230,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         className="absolute inset-0 pointer-events-none"
         style={{
           background:
-            "radial-gradient(circle at 20% 20%, rgba(79,138,255,0.12), transparent 40%), radial-gradient(circle at 80% 80%, rgba(139,92,246,0.12), transparent 40%)",
+            "radial-gradient(circle at 20% 20%, rgba(34,211,238,0.12), transparent 40%), radial-gradient(circle at 80% 80%, rgba(236,72,153,0.12), transparent 40%)",
         }}
       />
 
@@ -243,7 +243,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         style={{
           background: "var(--bg-panel)",
           border: "1px solid var(--border-subtle)",
-          boxShadow: "0 0 60px rgba(79,138,255,0.08)",
+          boxShadow: "0 0 60px rgba(59, 130, 246,0.08)",
         }}
       >
         <div className="flex flex-col items-center mb-6">
@@ -504,7 +504,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                     onClick={() => setRememberMe((v) => !v)}
                     className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0 transition-all"
                     style={{
-                      background: rememberMe ? "linear-gradient(135deg, #4f8aff, #8b5cf6)" : "var(--bg-surface)",
+                      background: rememberMe ? "var(--accent-gradient)" : "var(--bg-surface)",
                       border: `1px solid ${rememberMe ? "transparent" : "var(--border-subtle)"}`,
                       cursor: "pointer",
                     }}
@@ -583,11 +583,11 @@ function SubmitButton({ loading, label }: { loading: boolean; label: string }) {
     <motion.button
       type="submit"
       disabled={loading}
-      whileHover={{ y: -1, boxShadow: "0 0 24px rgba(79,138,255,0.35)" }}
+      whileHover={{ y: -1, boxShadow: "0 0 24px rgba(59, 130, 246,0.35)" }}
       whileTap={{ scale: 0.98 }}
       className="mt-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold"
       style={{
-        background: "linear-gradient(135deg, #4f8aff, #8b5cf6)",
+        background: "var(--accent-gradient)",
         color: "white",
         opacity: loading ? 0.7 : 1,
       }}

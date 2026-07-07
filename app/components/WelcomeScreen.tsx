@@ -26,8 +26,8 @@ export function WelcomeScreen({ onSuggest }: WelcomeProps) {
         <div
           className="w-[72px] h-[72px] rounded-2xl flex items-center justify-center text-[34px]"
           style={{
-            background: "linear-gradient(135deg, #4f8aff, #8b5cf6)",
-            boxShadow: "0 0 40px rgba(79,138,255,0.4), 0 0 80px rgba(139,92,246,0.2)",
+            background: "var(--accent-gradient)",
+            boxShadow: "0 0 40px rgba(34,211,238,0.3), 0 0 80px rgba(236,72,153,0.25)",
           }}
         >
           🧠
@@ -60,11 +60,7 @@ export function WelcomeScreen({ onSuggest }: WelcomeProps) {
           <motion.button
             key={s.title}
             onClick={() => onSuggest(s.prompt)}
-            className="text-left p-4 rounded-xl transition-all"
-            style={{
-              background: "var(--bg-panel)",
-              border: "1px solid var(--border-subtle)",
-            }}
+            className="text-left p-4 rounded-xl transition-all glass-card"
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.35 + i * 0.05 }}
@@ -72,7 +68,7 @@ export function WelcomeScreen({ onSuggest }: WelcomeProps) {
               border: "1px solid var(--border-glow)",
               background: "var(--bg-hover)",
               y: -2,
-              boxShadow: "0 8px 24px rgba(79,138,255,0.1)",
+              boxShadow: "0 8px 24px rgba(59, 130, 246,0.1)",
             }}
             whileTap={{ scale: 0.98 }}
           >

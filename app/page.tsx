@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { Sidebar } from "./components/Sidebar";
 import { RightPanel, SearchRecord } from "./components/RightPanel";
 import { GraphCenter } from "./components/GraphCenter";
@@ -295,66 +296,80 @@ export default function Home() {
 
   const activeSession = sessions.find((s) => s.id === activeId);
 
+  let content: React.ReactNode;
   if (stage === "loading") {
-    return <div className="min-h-screen w-full" style={{ background: "var(--bg-deep)" }} />;
-  }
-  if (stage === "auth") {
-    return <AuthScreen onAuthenticated={handleAuthenticated} />;
-  }
-  if (stage === "select-agents") {
-    return <AgentSelectScreen initialSelected={selectedAgents} onContinue={handleAgentsSelected} />;
+    content = <div className="min-h-screen w-full" style={{ background: "var(--bg-deep)" }} />;
+  } else if (stage === "auth") {
+    content = <AuthScreen onAuthenticated={handleAuthenticated} />;
+  } else if (stage === "select-agents") {
+    content = <AgentSelectScreen initialSelected={selectedAgents} onContinue={handleAgentsSelected} />;
+  } else {
+    content = (
+      <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg-deep)", width: "100vw" }}>
+        {/* Left sidebar */}
+        <Sidebar
+          sessions={sidebarSessions}
+          activeId={activeId}
+          onSelect={handleSelect}
+          onNewChat={handleNewChat}
+          isMobileOpen={isMobileOpen}
+          onMobileClose={() => setIsMobileOpen(false)}
+          userEmail={userEmail ?? undefined}
+          agentCount={selectedAgents.length}
+          selectedAgents={selectedAgents}
+          onChangeAgents={() => setAuth((prev) => ({ ...prev, stage: "select-agents" }))}
+          onLogout={handleLogout}
+          sessionsLoading={sessionsLoading}
+        />
+
+        {/* Center — Brain Graph or Chat, toggled by session selection */}
+        {centerView === "chat" && activeSession ? (
+          <ChatArea
+            messages={activeSession.messages}
+            isTyping={isTyping}
+            onSend={handleSend}
+            onSuggest={handleSuggest}
+            onExplore={(label) => setSearchKeyword(label)}
+            onClear={handleClear}
+            onMenuClick={() => setIsMobileOpen(true)}
+            onGraphView={() => setCenterView("graph")}
+          />
+        ) : (
+          <GraphCenter
+            searchKeyword={searchKeyword}
+            onAiSourcesChange={setAiSources}
+            onAiAnswerReady={handleAiAnswerReady}
+            panelResetKey={panelResetKey}
+            sessions={filteredSessions}
+            sessionsLoading={sessionsLoading}
+            selectedAgents={selectedAgents}
+          />
+        )}
+
+        {/* Right panel — search + history */}
+        <RightPanel
+          searchKeyword={searchKeyword}
+          onSearchChange={setSearchKeyword}
+          onOpenPanel={() => setPanelResetKey((k) => k + 1)}
+          searchHistory={searchHistory}
+          onHistoryUpdate={handleHistoryUpdate}
+          onForgetPast={handleForgetPast}
+        />
+      </div>
+    );
   }
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg-deep)", width: "100vw" }}>
-      {/* Left sidebar */}
-      <Sidebar
-        sessions={sidebarSessions}
-        activeId={activeId}
-        onSelect={handleSelect}
-        onNewChat={handleNewChat}
-        isMobileOpen={isMobileOpen}
-        onMobileClose={() => setIsMobileOpen(false)}
-        userEmail={userEmail ?? undefined}
-        agentCount={selectedAgents.length}
-        selectedAgents={selectedAgents}
-        onChangeAgents={() => setAuth((prev) => ({ ...prev, stage: "select-agents" }))}
-        onLogout={handleLogout}
-      />
-
-      {/* Center — Brain Graph or Chat, toggled by session selection */}
-      {centerView === "chat" && activeSession ? (
-        <ChatArea
-          messages={activeSession.messages}
-          isTyping={isTyping}
-          onSend={handleSend}
-          onSuggest={handleSuggest}
-          onExplore={(label) => setSearchKeyword(label)}
-          onClear={handleClear}
-          onMenuClick={() => setIsMobileOpen(true)}
-          onGraphView={() => setCenterView("graph")}
-        />
-      ) : (
-        <GraphCenter
-          searchKeyword={searchKeyword}
-          onAiSourcesChange={setAiSources}
-          onAiAnswerReady={handleAiAnswerReady}
-          panelResetKey={panelResetKey}
-          sessions={filteredSessions}
-          sessionsLoading={sessionsLoading}
-          selectedAgents={selectedAgents}
-        />
-      )}
-
-      {/* Right panel — search + history */}
-      <RightPanel
-        searchKeyword={searchKeyword}
-        onSearchChange={setSearchKeyword}
-        onOpenPanel={() => setPanelResetKey((k) => k + 1)}
-        searchHistory={searchHistory}
-        onHistoryUpdate={handleHistoryUpdate}
-        onForgetPast={handleForgetPast}
-      />
-    </div>
+    <AnimatePresence mode="wait">
+      <motion.div
+        key={stage}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.22, ease: "easeInOut" }}
+      >
+        {content}
+      </motion.div>
+    </AnimatePresence>
   );
 }

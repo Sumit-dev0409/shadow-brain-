@@ -17,8 +17,8 @@ export function Logo({ collapsed = false }: LogoProps) {
         <div
           className="w-9 h-9 rounded-xl flex items-center justify-center text-[18px] font-bold"
           style={{
-            background: "linear-gradient(135deg, #4f8aff, #8b5cf6)",
-            boxShadow: "0 0 20px rgba(79,138,255,0.45), 0 0 40px rgba(139,92,246,0.2)",
+            background: "var(--accent-gradient)",
+            boxShadow: "0 0 20px rgba(34,211,238,0.35), 0 0 40px rgba(236,72,153,0.25)",
           }}
         >
           🧠
@@ -40,7 +40,8 @@ export function Logo({ collapsed = false }: LogoProps) {
           <span
             className="text-[15px] font-semibold"
             style={{
-              background: "linear-gradient(90deg, #7eb3ff, #b08bff)",
+              background: "var(--nebula-text-gradient)",
+              backgroundSize: "300%",
               WebkitBackgroundClip: "text",
               WebkitTextFillColor: "transparent",
               backgroundClip: "text",

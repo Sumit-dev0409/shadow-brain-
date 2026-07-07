@@ -66,7 +66,6 @@ export interface MemorySource {
   convId?: string;
   title: string;
   platform: string;
-  date?: string | null;
   role?: string;
   snippet?: string;
   summary?: string | null;

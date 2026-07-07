@@ -103,8 +103,8 @@ export function RightPanel({
           <div
             className="w-7 h-7 rounded-lg flex items-center justify-center text-[13px]"
             style={{
-              background: "linear-gradient(135deg, #4f8aff, #8b5cf6)",
-              boxShadow: "0 0 14px rgba(79,138,255,0.35)",
+              background: "var(--accent-gradient)",
+              boxShadow: "0 0 14px rgba(34,211,238,0.3)",
             }}
           >
             🧠
@@ -198,14 +198,14 @@ export function RightPanel({
                         className="w-full text-left px-3 py-2.5 rounded-xl flex items-center gap-3 group transition-all"
                         style={{
                           background: isActive ? "var(--bg-hover)" : "var(--bg-surface)",
-                          border: `1px solid ${isActive ? "rgba(79,138,255,0.4)" : "var(--border-subtle)"}`,
+                          border: `1px solid ${isActive ? "rgba(59, 130, 246,0.4)" : "var(--border-subtle)"}`,
                         }}
                       >
                         <span
                           className="w-2 h-2 rounded-full flex-shrink-0"
                           style={{
-                            background: "#4f8aff",
-                            boxShadow: "0 0 5px #4f8aff88",
+                            background: "#3b82f6",
+                            boxShadow: "0 0 5px #3b82f688",
                           }}
                         />
                         <div className="flex-1 min-w-0">
@@ -262,7 +262,7 @@ export function RightPanel({
             border: `1px solid ${searchKeyword ? "var(--border-glow)" : "var(--border-subtle)"}`,
             transition: "border-color 0.2s, box-shadow 0.2s",
             boxShadow: searchKeyword
-              ? "0 0 0 2px rgba(79,138,255,0.08), 0 0 16px rgba(79,138,255,0.1)"
+              ? "0 0 0 2px rgba(59, 130, 246,0.08), 0 0 16px rgba(59, 130, 246,0.1)"
               : "none",
           }}
         >

@@ -1,19 +1,42 @@
 @import "tailwindcss";
 
 :root {
-  --bg-deep: #07090f;
-  --bg-panel: #0c1018;
-  --bg-surface: #111827;
-  --bg-hover: #161e30;
-  --border-subtle: rgba(99, 130, 255, 0.12);
-  --border-glow: rgba(99, 130, 255, 0.32);
-  --blue: #4f8aff;
+  /* Core surfaces — Nebula theme: near-black violet void, lifted card surface */
+  --bg-deep: #0a0714;
+  --bg-panel: #0d0a1c;
+  --bg-surface: #140f26;
+  --bg-hover: #1d1638;
+  --bg-glass: rgba(19, 14, 36, 0.6);
+
+  --border-subtle: rgba(180, 160, 255, 0.1);
+  --border-glow: rgba(139, 92, 246, 0.4);
+
+  /* Accents — nebula spectrum: cyan → blue → purple → pink */
+  --blue: #3b82f6;
+  --blue-light: #60a5fa;
   --purple: #8b5cf6;
-  --blue-dim: rgba(79, 138, 255, 0.15);
-  --purple-dim: rgba(139, 92, 246, 0.15);
+  --purple-light: #a78bfa;
+  --cyan: #22d3ee;
+  --pink: #ec4899;
+  --blue-dim: rgba(59, 130, 246, 0.14);
+  --purple-dim: rgba(139, 92, 246, 0.14);
+  --cyan-dim: rgba(34, 211, 238, 0.14);
+  --pink-dim: rgba(236, 72, 153, 0.14);
+  --accent-gradient: linear-gradient(135deg, #22d3ee, #3b82f6, #a855f7, #ec4899);
+  --nebula-text-gradient: linear-gradient(90deg, #5eead4, #60a5fa, #c084fc, #f472b6);
+
   --text-primary: #e8edf5;
   --text-secondary: #8b97b3;
-  --text-muted: #3d4a66;
+  --text-muted: #4a4166;
+
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+  --shadow-soft: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --shadow-glow-blue: 0 0 24px rgba(59, 130, 246, 0.22);
+  --shadow-glow-purple: 0 0 24px rgba(139, 92, 246, 0.22);
+  --shadow-glow-cyan: 0 0 24px rgba(34, 211, 238, 0.24);
+  --shadow-glow-pink: 0 0 24px rgba(236, 72, 153, 0.24);
 }
 
 * {
@@ -53,6 +76,17 @@ body {
   100% { background-position: 200% 50%; }
 }
 
+@keyframes aurora-drift {
+  0%   { transform: translate(-6%, -4%) scale(1);   opacity: 0.55; }
+  50%  { transform: translate(5%, 4%) scale(1.15);   opacity: 0.85; }
+  100% { transform: translate(-6%, -4%) scale(1);   opacity: 0.55; }
+}
+
+@keyframes border-sweep {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+
 .animate-float {
   animation: float 4s ease-in-out infinite;
 }
@@ -61,11 +95,85 @@ body {
   animation: pulse-glow 2s ease-in-out infinite;
 }
 
+/* Slow-drifting ambient glow — sits behind main app content for visual depth */
+.aurora-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: -1;
+}
+.aurora-bg::before,
+.aurora-bg::after {
+  content: "";
+  position: absolute;
+  width: 60%;
+  height: 60%;
+  border-radius: 50%;
+  filter: blur(80px);
+  animation: aurora-drift 18s ease-in-out infinite;
+}
+.aurora-bg::before {
+  top: -10%;
+  left: -10%;
+  background: radial-gradient(circle, rgba(34,211,238,0.14), transparent 70%);
+}
+.aurora-bg::after {
+  bottom: -15%;
+  right: -10%;
+  background: radial-gradient(circle, rgba(236,72,153,0.14), transparent 70%);
+  animation-delay: -9s;
+}
+
+/* Shimmering gradient border sweep — used on primary CTA buttons */
+.border-sweep {
+  background-image: linear-gradient(
+    90deg,
+    rgba(34,211,238,0.5) 0%,
+    rgba(59,130,246,0.5) 25%,
+    rgba(168,85,247,0.5) 50%,
+    rgba(236,72,153,0.5) 75%,
+    rgba(34,211,238,0.5) 100%
+  );
+  background-size: 300% 100%;
+  animation: border-sweep 6s linear infinite;
+}
+
 .shimmer-text {
-  background: linear-gradient(90deg, #7eb3ff, #c4b5fd, #7eb3ff);
-  background-size: 200%;
+  background: linear-gradient(90deg, #5eead4, #60a5fa, #c084fc, #f472b6, #5eead4);
+  background-size: 300%;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  animation: shimmer-text 4s linear infinite;
+  animation: shimmer-text 6s linear infinite;
+}
+
+/* --- Glassmorphism primitives ---------------------------------------- */
+
+.glass-panel {
+  background: var(--bg-glass);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-soft);
+}
+
+.glass-card {
+  background: rgba(17, 24, 39, 0.55);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+}
+
+.glass-card:hover {
+  border-color: var(--border-glow);
+  box-shadow: var(--shadow-glow-blue);
+}
+
+/* Thin gradient rule used to divide panels without a hard line */
+.gradient-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-subtle) 20%, var(--border-subtle) 80%, transparent);
 }

@@ -33,7 +33,7 @@ export function AgentSelectScreen({ initialSelected = [], onContinue }: AgentSel
         className="absolute inset-0 pointer-events-none"
         style={{
           background:
-            "radial-gradient(circle at 80% 10%, rgba(139,92,246,0.12), transparent 40%), radial-gradient(circle at 10% 90%, rgba(79,138,255,0.12), transparent 40%)",
+            "radial-gradient(circle at 80% 10%, rgba(236,72,153,0.12), transparent 40%), radial-gradient(circle at 10% 90%, rgba(34,211,238,0.12), transparent 40%)",
         }}
       />
 
@@ -118,12 +118,12 @@ export function AgentSelectScreen({ initialSelected = [], onContinue }: AgentSel
           type="button"
           disabled={selected.length === 0}
           onClick={() => onContinue(selected)}
-          whileHover={selected.length > 0 ? { y: -1, boxShadow: "0 0 24px rgba(79,138,255,0.35)" } : {}}
+          whileHover={selected.length > 0 ? { y: -1, boxShadow: "0 0 24px rgba(59, 130, 246,0.35)" } : {}}
           whileTap={selected.length > 0 ? { scale: 0.98 } : {}}
           className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold"
           style={{
             background:
-              selected.length === 0 ? "var(--bg-surface)" : "linear-gradient(135deg, #4f8aff, #8b5cf6)",
+              selected.length === 0 ? "var(--bg-surface)" : "var(--accent-gradient)",
             color: selected.length === 0 ? "var(--text-muted)" : "white",
             cursor: selected.length === 0 ? "not-allowed" : "pointer",
             border: selected.length === 0 ? "1px solid var(--border-subtle)" : "none",

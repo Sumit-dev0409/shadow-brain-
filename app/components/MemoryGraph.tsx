@@ -12,7 +12,7 @@ interface MemoryGraphProps {
 const COLORS: Record<MemoryCategory, string> = {
   core: "#eaf2ff",
   task: "#f5a623",
-  idea: "#4f8aff",
+  idea: "#3b82f6",
   note: "#8b5cf6",
   reminder: "#fb7185",
 };
@@ -157,7 +157,7 @@ export function MemoryGraph({ data, onExplore }: MemoryGraphProps) {
 
   // A handful of faint, static background motes — pure atmosphere, not data.
   const ambientDots = useMemo(() => {
-    const palette = ["#4f8aff", "#f5a623", "#8b5cf6", "#fb7185"];
+    const palette = ["#3b82f6", "#f5a623", "#8b5cf6", "#fb7185"];
     return Array.from({ length: 26 }, (_, i) => ({
       x: hash(`amb-x-${i}`) * 2 - 1,
       y: hash(`amb-y-${i}`) * 2 - 1,
@@ -375,7 +375,7 @@ export function MemoryGraph({ data, onExplore }: MemoryGraphProps) {
         className="relative w-full rounded-xl overflow-hidden"
         role="img"
         aria-label={`Memory map for "${coreLabel}" with ${connectionCount} connected memories. Visual only — ask me about any of them directly.`}
-        style={{ background: "radial-gradient(circle at 50% 45%, #0d1424 0%, #07090f 75%)", border: "1px solid var(--border-subtle)" }}
+        style={{ background: "radial-gradient(circle at 50% 45%, #0d1424 0%, #0b1220 75%)", border: "1px solid var(--border-subtle)" }}
       >
         <canvas
           ref={canvasRef}

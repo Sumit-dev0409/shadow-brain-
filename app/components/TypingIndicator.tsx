@@ -14,8 +14,8 @@ export function TypingIndicator() {
       <div
         className="w-8 h-8 rounded-full flex items-center justify-center text-[14px] flex-shrink-0 mt-0.5"
         style={{
-          background: "linear-gradient(135deg, #4f8aff, #8b5cf6)",
-          boxShadow: "0 0 12px rgba(79,138,255,0.35)",
+          background: "var(--accent-gradient)",
+          boxShadow: "0 0 12px rgba(34,211,238,0.3)",
         }}
       >
         🧠

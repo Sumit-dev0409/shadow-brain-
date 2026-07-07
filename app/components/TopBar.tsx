@@ -15,8 +15,9 @@ export function TopBar({ onMenuClick, onClear, onGraphView }: TopBarProps) {
       className="flex items-center justify-between px-5 py-3.5 flex-shrink-0"
       style={{
         borderBottom: "1px solid var(--border-subtle)",
-        background: "rgba(7,9,15,0.85)",
-        backdropFilter: "blur(16px)",
+        background: "rgba(11,18,32,0.72)",
+        backdropFilter: "blur(16px) saturate(140%)",
+        WebkitBackdropFilter: "blur(16px) saturate(140%)",
       }}
     >
       <div className="flex items-center gap-3">
@@ -33,7 +34,7 @@ export function TopBar({ onMenuClick, onClear, onGraphView }: TopBarProps) {
         <div
           className="flex items-center gap-2 px-3 py-1.5 rounded-full text-[11.5px] font-medium"
           style={{
-            background: "rgba(79,138,255,0.1)",
+            background: "rgba(59,130,246,0.1)",
             border: "1px solid var(--border-glow)",
             color: "var(--blue)",
           }}
@@ -54,9 +55,9 @@ export function TopBar({ onMenuClick, onClear, onGraphView }: TopBarProps) {
             style={{
               border: "1px solid var(--border-glow)",
               color: "var(--blue)",
-              background: "rgba(79,138,255,0.08)",
+              background: "rgba(59,130,246,0.08)",
             }}
-            whileHover={{ background: "rgba(79,138,255,0.18)" }}
+            whileHover={{ background: "rgba(59,130,246,0.18)" }}
             whileTap={{ scale: 0.97 }}
           >
             <Network size={12} />

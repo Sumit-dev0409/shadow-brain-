@@ -2,22 +2,13 @@
 
 import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, MessageSquare, User, Bot, LogOut, X, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, MessageSquare, User, Bot, LogOut, X, ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
 import { Logo } from "./Logo";
+import { SettingsModal } from "./SettingsModal";
+import { SessionRowSkeleton } from "./Skeleton";
 import { ChatSession } from "@/app/types";
 import { formatTime } from "@/app/lib/utils";
-
-const PLATFORM_META: Record<string, { label: string; color: string }> = {
-  chatgpt:    { label: "ChatGPT",    color: "#10a37f" },
-  claude:     { label: "Claude",     color: "#f97316" },
-  gemini:     { label: "Gemini",     color: "#3b82f6" },
-  copilot:    { label: "Copilot",    color: "#8b5cf6" },
-  mscopilot:  { label: "Copilot",    color: "#8b5cf6" },
-  perplexity: { label: "Perplexity", color: "#14b8a6" },
-  grok:       { label: "Grok",       color: "#ef4444" },
-  deepseek:   { label: "DeepSeek",   color: "#06b6d4" },
-  blackbox:   { label: "Blackbox",   color: "#22c55e" },
-};
+import { PLATFORM_META } from "@/app/lib/agents";
 
 // Normalize mscopilot → copilot for agent matching
 function normalizePlatform(p?: string) {
@@ -29,11 +20,13 @@ function SessionRow({
   activeId,
   showPlatformBadge,
   onSelect,
+  index = 0,
 }: {
   session: ChatSession;
   activeId: string;
   showPlatformBadge: boolean;
   onSelect: () => void;
+  index?: number;
 }) {
   const isActive = session.id === activeId;
   return (
@@ -45,15 +38,17 @@ function SessionRow({
         background: isActive ? "var(--bg-hover)" : "transparent",
         border: `1px solid ${isActive ? "var(--border-glow)" : "transparent"}`,
       }}
-      whileHover={{ background: "var(--bg-hover)" }}
+      whileHover={{ background: "var(--bg-hover)", x: 2, boxShadow: "0 4px 14px rgba(59, 130, 246,0.08)" }}
+      whileTap={{ scale: 0.985 }}
       initial={{ opacity: 0, x: -10 }}
       animate={{ opacity: 1, x: 0 }}
+      transition={{ delay: Math.min(index * 0.025, 0.3), duration: 0.2 }}
     >
       {isActive && (
         <motion.span
           layoutId="active-indicator"
           className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 rounded-r"
-          style={{ height: "60%", background: "linear-gradient(180deg, #4f8aff, #8b5cf6)" }}
+          style={{ height: "60%", background: "linear-gradient(180deg, #22d3ee, #a855f7, #ec4899)" }}
         />
       )}
       <div className="flex items-start gap-2.5 w-full min-w-0">
@@ -111,6 +106,7 @@ function AgentHistory({
   collapsed,
   onToggleCollapse,
   onSelect,
+  loading = false,
 }: {
   sessions: ChatSession[];
   activeId: string;
@@ -118,6 +114,7 @@ function AgentHistory({
   collapsed: Record<string, boolean>;
   onToggleCollapse: (id: string) => void;
   onSelect: (id: string) => void;
+  loading?: boolean;
 }) {
   const multiAgent = selectedAgents.length > 1;
 
@@ -137,6 +134,16 @@ function AgentHistory({
       .map((id) => ({ id, sessions: map[id] }))
       .concat(map["__other__"].length ? [{ id: "__other__", sessions: map["__other__"] }] : []);
   }, [sessions, selectedAgents]);
+
+  if (sessions.length === 0 && loading) {
+    return (
+      <div className="px-3 mb-2 flex flex-col gap-0.5">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <SessionRowSkeleton key={i} />
+        ))}
+      </div>
+    );
+  }
 
   if (sessions.length === 0) {
     return (
@@ -170,8 +177,8 @@ function AgentHistory({
             </span>
           </div>
         )}
-        {agentSessions.map((s) => (
-          <SessionRow key={s.id} session={s} activeId={activeId} showPlatformBadge={false} onSelect={() => onSelect(s.id)} />
+        {agentSessions.map((s, i) => (
+          <SessionRow key={s.id} session={s} activeId={activeId} showPlatformBadge={false} onSelect={() => onSelect(s.id)} index={i} />
         ))}
       </div>
     );
@@ -229,8 +236,8 @@ function AgentHistory({
                   className="overflow-hidden"
                 >
                   <div className="px-1 pb-1 pt-0.5 flex flex-col gap-0.5">
-                    {groupSessions.map((s) => (
-                      <SessionRow key={s.id} session={s} activeId={activeId} showPlatformBadge={false} onSelect={() => onSelect(s.id)} />
+                    {groupSessions.map((s, i) => (
+                      <SessionRow key={s.id} session={s} activeId={activeId} showPlatformBadge={false} onSelect={() => onSelect(s.id)} index={i} />
                     ))}
                   </div>
                 </motion.div>
@@ -266,6 +273,7 @@ interface SidebarProps {
   selectedAgents?: string[];
   onChangeAgents?: () => void;
   onLogout?: () => void;
+  sessionsLoading?: boolean;
 }
 
 export function Sidebar({
@@ -280,9 +288,83 @@ export function Sidebar({
   selectedAgents = [],
   onChangeAgents,
   onLogout,
+  sessionsLoading = false,
 }: SidebarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Icon-only rail — shown on desktop when the sidebar is collapsed
+  const railContent = (
+    <div
+      className="flex flex-col items-center h-full py-4"
+      style={{
+        background: "var(--bg-panel)",
+        borderRight: "1px solid var(--border-subtle)",
+        width: "100%",
+      }}
+    >
+      <div
+        className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+        style={{ background: "var(--accent-gradient)", boxShadow: "var(--shadow-glow-blue)" }}
+      >
+        <span className="text-[13px] font-bold text-white">SB</span>
+      </div>
+
+      <div className="my-4" style={{ width: 28, height: 1, background: "var(--border-subtle)" }} />
+
+      <motion.button
+        onClick={onNewChat}
+        className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+        style={{
+          background: "linear-gradient(135deg, rgba(59,130,246,0.16), rgba(139,92,246,0.16))",
+          border: "1px solid var(--border-subtle)",
+        }}
+        whileHover={{ boxShadow: "var(--shadow-glow-blue)", y: -1 }}
+        whileTap={{ scale: 0.94 }}
+        title="New chat"
+      >
+        <Plus size={16} style={{ color: "var(--blue)" }} />
+      </motion.button>
+
+      <div className="flex-1" />
+
+      <motion.button
+        onClick={() => setSettingsOpen(true)}
+        className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 mb-2"
+        style={{ color: "var(--text-secondary)" }}
+        whileHover={{ background: "var(--bg-hover)", color: "var(--text-primary)" }}
+        whileTap={{ scale: 0.94 }}
+        title="Settings"
+      >
+        <Settings size={16} />
+      </motion.button>
+
+      <motion.button
+        onClick={() => setRailCollapsed(false)}
+        className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 mb-2"
+        style={{ color: "var(--text-secondary)" }}
+        whileHover={{ background: "var(--bg-hover)", color: "var(--text-primary)" }}
+        whileTap={{ scale: 0.94 }}
+        title="Expand sidebar"
+      >
+        <PanelLeftOpen size={16} />
+      </motion.button>
+
+      <div
+        className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+        style={{
+          background: "linear-gradient(135deg, #1e3a8a, #3b82f6)",
+          boxShadow: "0 0 10px rgba(59,130,246,0.3)",
+        }}
+        title={userEmail ?? "You"}
+      >
+        <User size={14} style={{ color: "white" }} />
+      </div>
+    </div>
+  );
+
   const sidebarContent = (
     <div
       className="flex flex-col h-full"
@@ -295,38 +377,61 @@ export function Sidebar({
       {/* Header */}
       <div className="p-4 flex items-center justify-between">
         <Logo />
-        <button
-          onClick={onMobileClose}
-          className="md:hidden p-1.5 rounded-lg transition-colors"
-          style={{ color: "var(--text-secondary)" }}
-        >
-          <X size={16} />
-        </button>
+        <div className="flex items-center gap-1">
+          <motion.button
+            onClick={() => setSettingsOpen(true)}
+            className="p-1.5 rounded-lg transition-colors"
+            style={{ color: "var(--text-secondary)" }}
+            whileHover={{ background: "var(--bg-hover)", color: "var(--text-primary)" }}
+            whileTap={{ scale: 0.94 }}
+            title="Settings"
+          >
+            <Settings size={16} />
+          </motion.button>
+          <motion.button
+            onClick={() => setRailCollapsed(true)}
+            className="hidden md:flex p-1.5 rounded-lg transition-colors"
+            style={{ color: "var(--text-secondary)" }}
+            whileHover={{ background: "var(--bg-hover)", color: "var(--text-primary)" }}
+            whileTap={{ scale: 0.94 }}
+            title="Collapse sidebar"
+          >
+            <PanelLeftClose size={16} />
+          </motion.button>
+          <button
+            onClick={onMobileClose}
+            className="md:hidden p-1.5 rounded-lg transition-colors"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            <X size={16} />
+          </button>
+        </div>
       </div>
 
       {/* Divider */}
       <div style={{ height: 1, background: "var(--border-subtle)", margin: "0 16px" }} />
 
-      {/* New Chat */}
+      {/* New Chat — shimmering gradient border for a bit of premium sparkle */}
       <div className="p-3">
-        <motion.button
-          onClick={() => { onNewChat(); onMobileClose(); }}
-          className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-[13px] font-medium transition-all"
-          style={{
-            background: "linear-gradient(135deg, rgba(79,138,255,0.12), rgba(139,92,246,0.12))",
-            border: "1px solid var(--border-glow)",
-            color: "var(--text-primary)",
-          }}
-          whileHover={{
-            background: "linear-gradient(135deg, rgba(79,138,255,0.22), rgba(139,92,246,0.22))",
-            boxShadow: "0 0 20px rgba(79,138,255,0.2)",
-            y: -1,
-          }}
-          whileTap={{ scale: 0.98 }}
-        >
-          <Plus size={15} style={{ color: "var(--blue)" }} />
-          New chat
-        </motion.button>
+        <div className="rounded-xl p-[1px] border-sweep">
+          <motion.button
+            onClick={() => { onNewChat(); onMobileClose(); }}
+            className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-[11px] text-[13px] font-medium transition-all"
+            style={{
+              background: "linear-gradient(135deg, rgba(59, 130, 246,0.12), rgba(139,92,246,0.12))",
+              color: "var(--text-primary)",
+            }}
+            whileHover={{
+              background: "linear-gradient(135deg, rgba(59, 130, 246,0.22), rgba(139,92,246,0.22))",
+              boxShadow: "0 0 20px rgba(59, 130, 246,0.2)",
+              y: -1,
+            }}
+            whileTap={{ scale: 0.98 }}
+          >
+            <Plus size={15} style={{ color: "var(--blue)" }} />
+            New chat
+          </motion.button>
+        </div>
       </div>
 
       {/* History — grouped by agent when multiple selected */}
@@ -337,6 +442,7 @@ export function Sidebar({
         collapsed={collapsed}
         onToggleCollapse={(id) => setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))}
         onSelect={(id) => { onSelect(id); onMobileClose(); }}
+        loading={sessionsLoading}
       />
 
       <div className="flex-1" />
@@ -386,8 +492,8 @@ export function Sidebar({
           <div
             className="w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold flex-shrink-0"
             style={{
-              background: "linear-gradient(135deg, #1e3a8a, #4f8aff)",
-              boxShadow: "0 0 10px rgba(79,138,255,0.3)",
+              background: "linear-gradient(135deg, #1e3a8a, #3b82f6)",
+              boxShadow: "0 0 10px rgba(59, 130, 246,0.3)",
             }}
           >
             <User size={14} style={{ color: "white" }} />
@@ -408,12 +514,15 @@ export function Sidebar({
   return (
     <>
       {/* Desktop sidebar */}
-      <div
-        className="hidden md:flex h-screen"
-        style={{ width: "20%", minWidth: 220, flexShrink: 0 }}
+      <motion.div
+        className="hidden md:flex h-screen overflow-hidden"
+        animate={{ width: railCollapsed ? 68 : 260 }}
+        initial={false}
+        transition={{ type: "spring", stiffness: 300, damping: 32 }}
+        style={{ flexShrink: 0 }}
       >
-        {sidebarContent}
-      </div>
+        {railCollapsed ? railContent : sidebarContent}
+      </motion.div>
 
       {/* Mobile overlay */}
       <AnimatePresence>
@@ -439,6 +548,15 @@ export function Sidebar({
           </>
         )}
       </AnimatePresence>
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        userEmail={userEmail}
+        selectedAgents={selectedAgents}
+        onChangeAgents={onChangeAgents}
+        onLogout={onLogout}
+      />
     </>
   );
 }

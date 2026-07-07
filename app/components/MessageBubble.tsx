@@ -50,8 +50,8 @@ export function MessageBubble({ message, onExplore }: MessageBubbleProps) {
           <div
             className="w-8 h-8 rounded-full flex items-center justify-center text-[14px] flex-shrink-0 mt-0.5"
             style={{
-              background: "linear-gradient(135deg, #4f8aff, #8b5cf6)",
-              boxShadow: "0 0 12px rgba(79,138,255,0.35)",
+              background: "var(--accent-gradient)",
+              boxShadow: "0 0 12px rgba(34,211,238,0.3)",
             }}
           >
             🧠
@@ -65,12 +65,14 @@ export function MessageBubble({ message, onExplore }: MessageBubbleProps) {
             isUser
               ? {
                   background: "linear-gradient(135deg, #1e3a6e, #1e4d96)",
-                  border: "1px solid rgba(79,138,255,0.28)",
+                  border: "1px solid rgba(59, 130, 246,0.28)",
                   borderTopRightRadius: 4,
                   color: "#dce8ff",
                 }
               : {
-                  background: "var(--bg-panel)",
+                  background: "var(--bg-glass)",
+                  backdropFilter: "blur(12px) saturate(140%)",
+                  WebkitBackdropFilter: "blur(12px) saturate(140%)",
                   border: "1px solid var(--border-subtle)",
                   borderTopLeftRadius: 4,
                   color: "var(--text-primary)",
@@ -87,8 +89,8 @@ export function MessageBubble({ message, onExplore }: MessageBubbleProps) {
           <div
             className="w-8 h-8 rounded-full flex items-center justify-center text-[12px] font-semibold flex-shrink-0 mt-0.5"
             style={{
-              background: "linear-gradient(135deg, #1e3a8a, #4f8aff)",
-              boxShadow: "0 0 10px rgba(79,138,255,0.25)",
+              background: "linear-gradient(135deg, #1e3a8a, #3b82f6)",
+              boxShadow: "0 0 10px rgba(59, 130, 246,0.25)",
               color: "white",
             }}
           >

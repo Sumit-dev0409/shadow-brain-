@@ -45,11 +45,13 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       <div
         className="max-w-[780px] mx-auto"
         style={{
-          background: "var(--bg-panel)",
+          background: "var(--bg-glass)",
+          backdropFilter: "blur(16px) saturate(140%)",
+          WebkitBackdropFilter: "blur(16px) saturate(140%)",
           border: `1px solid ${canSend ? "var(--border-glow)" : "var(--border-subtle)"}`,
-          borderRadius: 14,
+          borderRadius: "var(--radius-md)",
           transition: "border-color 0.2s, box-shadow 0.2s",
-          boxShadow: canSend ? "0 0 0 3px rgba(79,138,255,0.08), 0 0 24px rgba(79,138,255,0.12)" : "none",
+          boxShadow: canSend ? "0 0 0 3px rgba(59, 130, 246,0.08), 0 0 24px rgba(59, 130, 246,0.12)" : "var(--shadow-soft)",
         }}
       >
         <div className="flex items-end gap-2 px-3.5 py-3">
@@ -98,14 +100,14 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
               className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
               style={{
                 background: canSend
-                  ? "linear-gradient(135deg, #4f8aff, #8b5cf6)"
+                  ? "var(--accent-gradient)"
                   : "var(--bg-surface)",
                 color: "white",
                 cursor: canSend ? "pointer" : "not-allowed",
-                boxShadow: canSend ? "0 0 14px rgba(79,138,255,0.4)" : "none",
+                boxShadow: canSend ? "0 0 14px rgba(59, 130, 246,0.4)" : "none",
                 transition: "all 0.2s",
               }}
-              whileHover={canSend ? { scale: 1.08, boxShadow: "0 0 22px rgba(79,138,255,0.6)" } : {}}
+              whileHover={canSend ? { scale: 1.08, boxShadow: "0 0 22px rgba(59, 130, 246,0.6)" } : {}}
               whileTap={canSend ? { scale: 0.94 } : {}}
             >
               <Send size={14} style={{ marginLeft: 1 }} />

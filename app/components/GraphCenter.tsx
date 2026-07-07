@@ -2,10 +2,11 @@
 
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { MessageSquare, Clock, Sparkles, Loader2, X } from "lucide-react";
+import { MessageSquare, Sparkles, Loader2, X } from "lucide-react";
 import { ObsidianGraph } from "./ObsidianGraph";
 import { ChatSession, Message } from "@/app/types";
 import { searchMemory, MemorySource } from "@/app/lib/api";
+import { AI_AGENTS, PLATFORM_COLORS, PLATFORM_LABELS, PLATFORM_ABBR } from "@/app/lib/agents";
 
 interface GraphCenterProps {
   searchKeyword: string;
@@ -17,53 +18,9 @@ interface GraphCenterProps {
   selectedAgents?: string[];
 }
 
-const PLATFORM_COLORS: Record<string, string> = {
-  chatgpt:    "#10a37f",
-  claude:     "#f97316",
-  gemini:     "#3b82f6",
-  copilot:    "#8b5cf6",
-  mscopilot:  "#8b5cf6",
-  perplexity: "#14b8a6",
-  grok:       "#ef4444",
-  deepseek:   "#06b6d4",
-  blackbox:        "#22c55e",
-  "brain-shadow":  "#4f8aff",
-};
-
-const PLATFORM_LABELS: Record<string, string> = {
-  chatgpt:    "ChatGPT",
-  claude:     "Claude",
-  gemini:     "Gemini",
-  copilot:    "Copilot",
-  mscopilot:  "Copilot",
-  perplexity: "Perplexity",
-  grok:       "Grok",
-  deepseek:   "DeepSeek",
-  blackbox:   "Blackbox",
-};
-
-const PLATFORM_ABBR: Record<string, string> = {
-  chatgpt:        "GPT",
-  claude:         "CLU",
-  gemini:         "GEM",
-  copilot:        "COP",
-  mscopilot:      "COP",
-  perplexity:     "PPX",
-  grok:           "GRK",
-  deepseek:       "DSK",
-  blackbox:       "BBX",
-  "brain-shadow": "AI",
-};
-
 function fmtTime(date: Date): string {
   return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit" }).format(date);
 }
-
-function fmtDate(date: Date): string {
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date);
-}
-
-/** Short label shown on the canvas node e.g. "Jun 18" */
 
 /**
  * Deterministically map a session to a node ID so the same session
@@ -251,7 +208,7 @@ export function GraphCenter({ searchKeyword, onAiSourcesChange, onAiAnswerReady,
     const sessMap  = new Map<number, ChatSession[]>();
     matchingSessions.forEach((s) => {
       const nodeId = sessionToNodeId(s.id);
-      const color  = (s.platform && PLATFORM_COLORS[s.platform]) ? PLATFORM_COLORS[s.platform] : "#4f8aff";
+      const color  = (s.platform && PLATFORM_COLORS[s.platform]) ? PLATFORM_COLORS[s.platform] : "#3b82f6";
       colorMap.set(nodeId, color);
       const existing = sessMap.get(nodeId) ?? [];
       sessMap.set(nodeId, [...existing, s]);
@@ -333,73 +290,79 @@ export function GraphCenter({ searchKeyword, onAiSourcesChange, onAiAnswerReady,
 
   return (
     <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden" style={{ background: "var(--bg-deep)" }}>
+      {/* Ambient drifting glow — adds depth behind the graph and panels */}
+      <div className="aurora-bg" />
+
       {/* Top bar */}
       <div
         className="flex items-center justify-between px-5 py-3.5 flex-shrink-0"
         style={{
           borderBottom: "1px solid var(--border-subtle)",
-          background: "rgba(7,9,15,0.85)",
+          background: "rgba(11,18,32,0.72)",
           backdropFilter: "blur(16px)",
         }}
       >
         <div
-          className="flex items-center gap-2 px-3 py-1.5 rounded-full text-[11.5px] font-medium"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-full text-[11.5px] font-semibold"
           style={{
-            background: "rgba(79,138,255,0.1)",
+            background: "rgba(139, 92, 246, 0.1)",
             border: "1px solid var(--border-glow)",
-            color: "var(--blue)",
           }}
         >
           <span
             className="w-1.5 h-1.5 rounded-full animate-pulse-glow"
             style={{ background: "#34d399", boxShadow: "0 0 6px #34d399" }}
           />
-          Shadow Brain v2.1
+          <span
+            style={{
+              background: "var(--nebula-text-gradient)",
+              backgroundSize: "300%",
+              WebkitBackgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+              backgroundClip: "text",
+            }}
+          >
+            Shadow Brain v2.1
+          </span>
         </div>
 
         <div className="flex items-center gap-3">
-          {[
-            { color: "#10a37f", label: "ChatGPT" },
-            { color: "#f97316", label: "Claude" },
-            { color: "#14b8a6", label: "Perplexity" },
-            { color: "#ef4444", label: "Grok" },
-            { color: "#3b82f6", label: "Gemini" },
-            { color: "#8b5cf6", label: "Copilot" },
-          ].map((item) => (
-            <div key={item.label} className="hidden lg:flex items-center gap-1.5">
+          <div className="hidden lg:flex items-center gap-1.5">
+            {AI_AGENTS.map((agent) => (
               <span
+                key={agent.id}
+                title={agent.name}
                 className="w-2 h-2 rounded-full"
-                style={{ background: item.color, boxShadow: `0 0 5px ${item.color}` }}
+                style={{ background: agent.accent, boxShadow: `0 0 5px ${agent.accent}` }}
               />
-              <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>{item.label}</span>
-            </div>
-          ))}
-          <div
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px]"
-            style={{
-              background: "var(--bg-surface)",
-              border: "1px solid var(--border-subtle)",
-              color: "var(--text-muted)",
-            }}
-          >
-            {sessionsLoading ? (
-              <>
-                <span
-                  className="w-1.5 h-1.5 rounded-full animate-pulse"
-                  style={{ background: "#4f8aff" }}
-                />
-                Loading…
-              </>
-            ) : (
-              <>
-                <span
-                  className="w-1.5 h-1.5 rounded-full"
-                  style={{ background: sessions.length > 0 ? "#34d399" : "var(--text-muted)" }}
-                />
-                {sessions.length} conversation{sessions.length !== 1 ? "s" : ""} · 1,000 nodes
-              </>
-            )}
+            ))}
           </div>
+          {sessionsLoading ? (
+            <div
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px]"
+              style={{ background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", color: "var(--text-muted)" }}
+            >
+              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "var(--cyan)" }} />
+              Loading…
+            </div>
+          ) : (
+            <>
+              <div
+                className="flex items-baseline gap-1.5 px-3 py-1 rounded-lg"
+                style={{ background: "var(--cyan-dim)", border: "1px solid rgba(34,211,238,0.3)", boxShadow: "var(--shadow-glow-cyan)" }}
+              >
+                <span className="text-[13px] font-bold" style={{ color: "var(--cyan)" }}>{sessions.length}</span>
+                <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>convo{sessions.length !== 1 ? "s" : ""}</span>
+              </div>
+              <div
+                className="flex items-baseline gap-1.5 px-3 py-1 rounded-lg"
+                style={{ background: "var(--pink-dim)", border: "1px solid rgba(236,72,153,0.3)", boxShadow: "var(--shadow-glow-pink)" }}
+              >
+                <span className="text-[13px] font-bold" style={{ color: "var(--pink)" }}>1,000</span>
+                <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>nodes</span>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -447,11 +410,11 @@ onNodeClick={handleNodeClick}
               transition={{ duration: 0.2 }}
               className="absolute top-4 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded-full text-[11px] font-medium pointer-events-none"
               style={{
-                background: "rgba(79,138,255,0.15)",
+                background: "rgba(59, 130, 246,0.15)",
                 border: "1px solid var(--border-glow)",
                 color: "var(--blue)",
                 backdropFilter: "blur(8px)",
-                boxShadow: "0 0 20px rgba(79,138,255,0.2)",
+                boxShadow: "0 0 20px rgba(59, 130, 246,0.2)",
                 whiteSpace: "nowrap",
               }}
             >
@@ -533,7 +496,7 @@ onNodeClick={handleNodeClick}
                       <button
                         onClick={handleUnpin}
                         className="flex-shrink-0 px-2 py-1 rounded text-[10px]"
-                        style={{ color: "var(--blue)", background: "rgba(79,138,255,0.1)", border: "1px solid rgba(79,138,255,0.2)" }}
+                        style={{ color: "var(--blue)", background: "rgba(59, 130, 246,0.1)", border: "1px solid rgba(59, 130, 246,0.2)" }}
                       >
                         Show all
                       </button>
@@ -552,7 +515,7 @@ onNodeClick={handleNodeClick}
                 <div
                   className="px-4 py-2 text-[10px] flex-shrink-0"
                   style={{
-                    background: "rgba(79,138,255,0.06)",
+                    background: "rgba(59, 130, 246,0.06)",
                     borderBottom: "1px solid var(--border-subtle)",
                     color: "var(--text-muted)",
                   }}
@@ -595,7 +558,7 @@ onNodeClick={handleNodeClick}
                               Sources ({aiSources.length})
                             </span>
                             {aiSources.map((src) => {
-                              const color = src.platform ? PLATFORM_COLORS[src.platform] ?? "#4f8aff" : "#4f8aff";
+                              const color = src.platform ? PLATFORM_COLORS[src.platform] ?? "#3b82f6" : "#3b82f6";
                               const label = src.platform ? PLATFORM_LABELS[src.platform] ?? src.platform : "";
                               return (
                                 <div
@@ -650,7 +613,7 @@ onNodeClick={handleNodeClick}
                     <div className="flex flex-col gap-5">
                       {displayedSessions.map((session, sIdx) => {
                         const hasAnyContent = session.messages.some(m => (m.content || "").trim().length > 0);
-                        const platformColor = session.platform ? PLATFORM_COLORS[session.platform] ?? "#4f8aff" : "#4f8aff";
+                        const platformColor = session.platform ? PLATFORM_COLORS[session.platform] ?? "#3b82f6" : "#3b82f6";
                         return (
                         <motion.div
                           key={session.id}
@@ -667,7 +630,7 @@ onNodeClick={handleNodeClick}
                           {displayedSessions.length > 1 && (
                             <div
                               className="flex items-center justify-between px-3 py-2.5"
-                              style={{ background: "rgba(79,138,255,0.06)", borderBottom: "1px solid var(--border-subtle)" }}
+                              style={{ background: "rgba(59, 130, 246,0.06)", borderBottom: "1px solid var(--border-subtle)" }}
                             >
                               <div className="flex items-center gap-2 min-w-0">
                                 <span
@@ -691,12 +654,6 @@ onNodeClick={handleNodeClick}
                                     {PLATFORM_LABELS[session.platform]}
                                   </span>
                                 )}
-                                <div className="flex items-center gap-1 ml-1">
-                                  <Clock size={9} style={{ color: "var(--text-muted)" }} />
-                                  <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>
-                                    {fmtDate(session.createdAt)}
-                                  </span>
-                                </div>
                               </div>
                             </div>
                           )}
@@ -770,11 +727,11 @@ onNodeClick={handleNodeClick}
                                       className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-[8px] font-bold"
                                       style={{
                                         background: isUser
-                                          ? "linear-gradient(135deg,#4f8aff,#8b5cf6)"
+                                          ? "var(--accent-gradient)"
                                           : platformColor,
                                         color: "#fff",
                                         marginTop: 2,
-                                        boxShadow: isUser ? "0 0 8px rgba(79,138,255,0.3)" : "none",
+                                        boxShadow: isUser ? "0 0 8px rgba(59, 130, 246,0.3)" : "none",
                                       }}
                                     >
                                       {isUser ? "U" : (session.platform ? PLATFORM_ABBR[session.platform] ?? "AI" : "AI")}
@@ -785,8 +742,8 @@ onNodeClick={handleNodeClick}
                                       className="rounded-xl px-3 py-2 min-w-0"
                                       style={{
                                         maxWidth: "calc(100% - 32px)",
-                                        background: isUser ? "rgba(79,138,255,0.12)" : "rgba(255,255,255,0.04)",
-                                        border: `1px solid ${isUser ? "rgba(79,138,255,0.2)" : "var(--border-subtle)"}`,
+                                        background: isUser ? "rgba(59, 130, 246,0.12)" : "rgba(255,255,255,0.04)",
+                                        border: `1px solid ${isUser ? "rgba(59, 130, 246,0.2)" : "var(--border-subtle)"}`,
                                         boxShadow: "none",
                                       }}
                                     >

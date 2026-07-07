@@ -167,9 +167,6 @@ const searchConversations = async (req, res, next) => {
     }
 
     const context = scored.map(({ conv, relevantMsgs }, i) => {
-      const date = conv.createdAt
-        ? new Date(conv.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-        : 'Unknown date';
       const topic = conv.enrichment?.topic ? `Topic: ${conv.enrichment.topic}` : '';
       const summary = conv.enrichment?.summary ? `Summary: ${conv.enrichment.summary}` : '';
 
@@ -182,7 +179,6 @@ const searchConversations = async (req, res, next) => {
         `CONVERSATION ${i + 1}:`,
         `Title: ${conv.title || 'Untitled'}`,
         `Platform: ${conv.platform}`,
-        `Date: ${date}`,
         topic, summary,
         msgs ? 'Relevant messages:' : '',
         msgs,
@@ -206,9 +202,6 @@ Write 2-3 plain sentences summarising what was discussed about "${query}". Your 
     // Message-level sources: one entry per matched message — no fallback to unrelated messages
     const sources = [];
     for (const { conv, relevantMsgs } of scored) {
-      const date = conv.createdAt
-        ? new Date(conv.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-        : null;
       if (relevantMsgs.length > 0) {
         for (const msg of relevantMsgs.slice(0, 4)) {
           sources.push({
@@ -216,7 +209,6 @@ Write 2-3 plain sentences summarising what was discussed about "${query}". Your 
             convId: conv._id.toString(),
             title: conv.title || 'Untitled',
             platform: conv.platform || 'unknown',
-            date,
             role: msg.role,
             snippet: (msg.content || '').slice(0, 200),
             keywords: conv.enrichment?.keywords || [],
@@ -230,7 +222,6 @@ Write 2-3 plain sentences summarising what was discussed about "${query}". Your 
           convId: conv._id.toString(),
           title: conv.title || 'Untitled',
           platform: conv.platform || 'unknown',
-          date,
           role: null,
           snippet: null,
           keywords: conv.enrichment?.keywords || [],
@@ -247,12 +238,9 @@ Write 2-3 plain sentences summarising what was discussed about "${query}". Your 
       logger.error(`[Search] Groq failed: ${groqErr.message}`);
       answer = `Found ${scored.length} conversation(s) related to "${query}":\n\n` +
         scored.map(({ conv }) => {
-          const date = conv.createdAt
-            ? new Date(conv.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-            : 'Unknown date';
           const kws = conv.enrichment?.keywords?.length ? `\n  Keywords: ${conv.enrichment.keywords.join(', ')}` : '';
           const summary = conv.enrichment?.summary ? `\n  ${conv.enrichment.summary}` : '';
-          return `• **${conv.title || 'Untitled'}** (${conv.platform}, ${date})${summary}${kws}`;
+          return `• **${conv.title || 'Untitled'}** (${conv.platform})${summary}${kws}`;
         }).join('\n\n');
     }
 
