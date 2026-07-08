@@ -383,8 +383,73 @@ new MutationObserver(() => {
 
 // ─── Bulk Import: Get sidebar chat URLs (for popup navigation) ────────────────
 
+// ChatGPT virtualizes/lazy-loads the sidebar chat list — only a couple dozen
+// links exist in the DOM until you scroll further down. We scroll the
+// sidebar's scroll container to the bottom repeatedly, waiting for new
+// links to appear, until the link count is stable (nothing new loads).
+function getSidebarScrollContainer() {
+  const navCandidates = [document.querySelector('nav'), document.querySelector('aside')].filter(Boolean);
+
+  for (const nav of navCandidates) {
+    let el = nav;
+    while (el && el !== document.documentElement) {
+      const style     = window.getComputedStyle(el);
+      const canScroll = style.overflowY === 'auto' || style.overflowY === 'scroll';
+      const hasRoom   = el.scrollHeight > el.clientHeight + 50;
+      if (canScroll && hasRoom) return el;
+      el = el.parentElement;
+    }
+  }
+  return navCandidates[0] || null;
+}
+
+function countSidebarLinks() {
+  return document.querySelectorAll('a[href*="/c/"]').length;
+}
+
+function scrollSidebarToLoadAllChats(maxWaitMs = 30_000) {
+  return new Promise((resolve) => {
+    const container = getSidebarScrollContainer();
+    if (!container) { resolve(); return; }
+
+    const start = Date.now();
+    let lastCount = countSidebarLinks();
+    let stableRounds = 0;
+
+    const tick = () => {
+      if (Date.now() - start > maxWaitMs) {
+        console.log('[Brain Shadow] Sidebar scroll timeout — proceeding with what loaded');
+        resolve();
+        return;
+      }
+
+      container.scrollTop = container.scrollHeight;
+
+      setTimeout(() => {
+        const count = countSidebarLinks();
+        if (count === lastCount) {
+          stableRounds++;
+          if (stableRounds >= 3) {
+            console.log(`[Brain Shadow] Sidebar fully loaded — ${count} chat links`);
+            resolve();
+            return;
+          }
+        } else {
+          stableRounds = 0;
+          lastCount = count;
+        }
+        tick();
+      }, 700);
+    };
+
+    tick();
+  });
+}
+
 // ─── Get sidebar chat URLs for bulk import ────────────────────────────────
-function getSidebarChatUrls() {
+async function getSidebarChatUrls() {
+  await scrollSidebarToLoadAllChats();
+
   // Try multiple selectors for sidebar chat links
   const selectors = [
     // Main sidebar - newer UI
@@ -425,8 +490,7 @@ function getSidebarChatUrls() {
 // ─── Message listener for bulk import ─────────────────────────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_SIDEBAR_CHATS') {
-    const urls = getSidebarChatUrls();
-    sendResponse(urls);
+    getSidebarChatUrls().then(sendResponse);
     return true;
   }
   if (message.type === 'CAPTURE_CURRENT') {

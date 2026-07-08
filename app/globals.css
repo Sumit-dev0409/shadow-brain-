@@ -61,6 +61,23 @@ body {
   border-radius: 4px;
 }
 
+.scrollable-area {
+  scrollbar-color: rgba(79,138,255,0.35) transparent;
+  scrollbar-width: thin;
+}
+.scrollable-area::-webkit-scrollbar {
+  width: 8px;
+}
+.scrollable-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollable-area::-webkit-scrollbar-thumb {
+  background: rgba(79,138,255,0.35);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
 @keyframes pulse-glow {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }

@@ -1,7 +1,7 @@
 "use client";
 
-import { Search, X, Clock, Sparkles, ChevronRight, Trash2 } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { Search, X, Clock, Sparkles, ChevronRight, Trash2, ArrowRight } from "lucide-react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export interface SearchRecord {
@@ -15,10 +15,13 @@ export interface SearchRecord {
 interface RightPanelProps {
   searchKeyword: string;
   onSearchChange: (kw: string) => void;
+  onSearchSubmit?: () => void;
   onOpenPanel?: () => void;
   searchHistory: SearchRecord[];
   onHistoryUpdate: (record: SearchRecord) => void;
   onForgetPast: () => void;
+  isSearchLoading?: boolean;
+  resultsPanelContent?: ReactNode;
 }
 
 function timeAgo(ts: number): string {
@@ -41,34 +44,16 @@ function ordinal(n: number): string {
 export function RightPanel({
   searchKeyword,
   onSearchChange,
+  onSearchSubmit,
   onOpenPanel,
   searchHistory,
   onHistoryUpdate,
   onForgetPast,
+  isSearchLoading = false,
+  resultsPanelContent,
 }: RightPanelProps) {
   const [showConfirm, setShowConfirm] = useState(false);
-  const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastCommitted = useRef<string>("");
-
-  useEffect(() => {
-    if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
-    const kw = searchKeyword.trim().toLowerCase();
-    if (kw.length < 2) return;
-
-    commitTimerRef.current = setTimeout(() => {
-      if (kw === lastCommitted.current) return;
-      lastCommitted.current = kw;
-      const existing = searchHistory.find((r) => r.keyword === kw);
-      if (existing) {
-        onHistoryUpdate({ ...existing, count: existing.count + 1, lastAt: Date.now() });
-      } else {
-        onHistoryUpdate({ keyword: kw, count: 1, firstAt: Date.now(), lastAt: Date.now() });
-      }
-    }, 600);
-
-    return () => { if (commitTimerRef.current) clearTimeout(commitTimerRef.current); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchKeyword]);
 
   const recommendations = [...searchHistory]
     .sort((a, b) => b.lastAt - a.lastAt || b.count - a.count)
@@ -164,93 +149,103 @@ export function RightPanel({
       <div style={{ height: 1, background: "var(--border-subtle)", margin: "0 16px" }} />
 
       {/* Recommendations area */}
-      <div className="flex-1 overflow-y-auto p-3">
-        <AnimatePresence mode="popLayout">
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-y-auto px-3 pb-3 space-y-3 scrollable-area">
+          <AnimatePresence mode="popLayout">
 
-          {recommendations.length > 0 && (
-            <motion.div key="recs" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-              <div className="flex items-center gap-1.5 mb-2 px-1">
-                <Sparkles size={11} style={{ color: "var(--blue)" }} />
-                <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
-                  {activeKw.length >= 2 ? "Related searches" : "Recent searches"}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                {recommendations
-                  .filter((r) => activeKw.length < 2 || r.keyword.includes(activeKw) || activeKw.includes(r.keyword))
-                  .concat(
-                    activeKw.length >= 2
-                      ? recommendations.filter(
-                          (r) => !r.keyword.includes(activeKw) && !activeKw.includes(r.keyword)
-                        )
-                      : []
-                  )
-                  .slice(0, 6)
-                  .map((record, idx) => {
-                    const isActive = record.keyword === activeKw;
-                    return (
-                      <motion.button
-                        key={record.keyword}
-                        initial={{ opacity: 0, x: 8 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: idx * 0.04 }}
-                        onClick={() => handleRecordClick(record)}
-                        className="w-full text-left px-3 py-2.5 rounded-xl flex items-center gap-3 group transition-all"
-                        style={{
-                          background: isActive ? "var(--bg-hover)" : "var(--bg-surface)",
-                          border: `1px solid ${isActive ? "rgba(59, 130, 246,0.4)" : "var(--border-subtle)"}`,
-                        }}
-                      >
-                        <span
-                          className="w-2 h-2 rounded-full flex-shrink-0"
+            {recommendations.length > 0 && (
+              <motion.div key="recs" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                <div className="flex items-center gap-1.5 mb-2 px-1">
+                  <Sparkles size={11} style={{ color: "var(--blue)" }} />
+                  <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+                    {activeKw.length >= 2 ? "Related searches" : "Recent searches"}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {recommendations
+                    .filter((r) => activeKw.length < 2 || r.keyword.includes(activeKw) || activeKw.includes(r.keyword))
+                    .concat(
+                      activeKw.length >= 2
+                        ? recommendations.filter(
+                            (r) => !r.keyword.includes(activeKw) && !activeKw.includes(r.keyword)
+                          )
+                        : []
+                    )
+                    .slice(0, 6)
+                    .map((record, idx) => {
+                      const isActive = record.keyword === activeKw;
+                      return (
+                        <motion.button
+                          key={record.keyword}
+                          initial={{ opacity: 0, x: 8 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: idx * 0.04 }}
+                          onClick={() => handleRecordClick(record)}
+                          className="w-full text-left px-3 py-2.5 rounded-xl flex items-center gap-3 group transition-all"
                           style={{
-                            background: "#3b82f6",
-                            boxShadow: "0 0 5px #3b82f688",
+                            background: isActive ? "var(--bg-hover)" : "var(--bg-surface)",
+                            border: `1px solid ${isActive ? "rgba(79,138,255,0.4)" : "var(--border-subtle)"}`,
                           }}
-                        />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[12px] font-medium truncate" style={{ color: "var(--text-primary)" }}>
-                            {record.keyword}
-                          </p>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <Clock size={9} style={{ color: "var(--text-muted)" }} />
-                            <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-                              {ordinal(record.count)} · {timeAgo(record.lastAt)}
-                            </span>
-                          </div>
-                          {record.summary && (
-                            <p className="text-[10.5px] mt-1.5 leading-snug line-clamp-3" style={{ color: "var(--text-secondary)" }}>
-                              {record.summary}
+                        >
+                          <span
+                            className="w-2 h-2 rounded-full flex-shrink-0"
+                            style={{
+                              background: "#4f8aff",
+                              boxShadow: "0 0 5px #4f8aff88",
+                            }}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[12px] font-medium truncate" style={{ color: "var(--text-primary)" }}>
+                              {record.keyword}
                             </p>
-                          )}
-                        </div>
-                        <ChevronRight
-                          size={13}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity"
-                          style={{ color: "var(--text-muted)" }}
-                        />
-                      </motion.button>
-                    );
-                  })}
-              </div>
-            </motion.div>
-          )}
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <Clock size={9} style={{ color: "var(--text-muted)" }} />
+                              <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                                {ordinal(record.count)} · {timeAgo(record.lastAt)}
+                              </span>
+                            </div>
+                            {record.summary && (
+                              <p className="text-[10.5px] mt-1.5 leading-snug line-clamp-3" style={{ color: "var(--text-secondary)" }}>
+                                {record.summary}
+                              </p>
+                            )}
+                          </div>
+                          <ChevronRight
+                            size={13}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity"
+                            style={{ color: "var(--text-muted)" }}
+                          />
+                        </motion.button>
+                      );
+                    })}
+                </div>
+              </motion.div>
+            )}
 
-          {recommendations.length === 0 && (
-            <motion.div
-              key="empty"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex flex-col items-center justify-center h-40 text-center gap-2"
-            >
-              <Sparkles size={22} style={{ color: "var(--text-muted)", opacity: 0.4 }} />
-              <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                Search something below to see
-                <br />your history &amp; recommendations here.
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
+            {recommendations.length === 0 && (
+              <motion.div
+                key="empty"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex flex-col items-center justify-center h-40 text-center gap-2"
+              >
+                <Sparkles size={22} style={{ color: "var(--text-muted)", opacity: 0.4 }} />
+                <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                  Search something below to see
+                  <br />your history &amp; recommendations here.
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div id="memory-search-results-host" className="flex flex-col gap-3 min-h-0">
+            {resultsPanelContent && (
+              <div className="min-h-0 overflow-y-auto max-h-[60vh] scrollable-area">
+                {resultsPanelContent}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Search box */}
@@ -278,10 +273,30 @@ export function RightPanel({
             type="text"
             value={searchKeyword}
             onChange={(e) => onSearchChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onSearchSubmit?.();
+              }
+            }}
             placeholder="Search past chats…"
             className="flex-1 bg-transparent outline-none text-[15px] min-w-0"
             style={{ color: "var(--text-primary)", fontFamily: "inherit" }}
           />
+          <button
+            type="button"
+            onClick={() => onSearchSubmit?.()}
+            disabled={isSearchLoading || searchKeyword.trim().length < 1}
+            className="p-2 rounded-lg transition-colors"
+            style={{
+              background: isSearchLoading || searchKeyword.trim().length < 1 ? "rgba(255,255,255,0.08)" : "rgba(79,138,255,0.16)",
+              color: isSearchLoading || searchKeyword.trim().length < 1 ? "var(--text-muted)" : "var(--blue)",
+              border: "1px solid rgba(79,138,255,0.18)",
+              cursor: isSearchLoading || searchKeyword.trim().length < 1 ? "not-allowed" : "pointer",
+            }}
+          >
+            <ArrowRight size={14} />
+          </button>
           {searchKeyword && (
             <button
               onClick={() => { onSearchChange(""); lastCommitted.current = ""; }}

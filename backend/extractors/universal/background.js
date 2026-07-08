@@ -77,13 +77,18 @@ async function navigateTab(tabId, url, extraMs = 1500) {
 }
 
 async function waitForContentScript(tabId, maxMs = 20000) {
-  const start = Date.now(); let lastCount = 0, stable = 0;
+  const start = Date.now(); let lastCount = -1, stable = 0;
   while (Date.now() - start < maxMs) {
     try {
       const r = await tabMessage(tabId, { type: 'PING' });
       if (r?.pong) {
         const n = r.messageCount || 0;
-        if (n === lastCount) { stable++; if (stable >= 3) return; }
+        // Require an actual (non-zero) message count before declaring "stable" —
+        // a freshly navigated tab reports 0 for the first second or two, and a
+        // background/inactive tab (throttled by Chrome) can stay at 0 far longer
+        // while it's still hydrating. Treating that as "ready" caused captures
+        // to fire on a blank page and silently fail.
+        if (n > 0 && n === lastCount) { stable++; if (stable >= 3) return; }
         else { stable = 0; lastCount = n; }
       }
     } catch {}
@@ -143,7 +148,7 @@ async function scrapePlatform(platform, baseUrl) {
 
     await setSessionProgress(platform, { total: newThreads.length, skipped, title: `Found ${newThreads.length} new chats` });
 
-    let savedCount = 0, syncedCount = 0;
+    let savedCount = 0, syncedCount = 0, failedCount = 0;
 
     for (let i = 0; i < newThreads.length; i++) {
       // Check this session's stop flag (not global — each session has its own)
@@ -167,12 +172,21 @@ async function scrapePlatform(platform, baseUrl) {
           await new Promise(r => setTimeout(r, 2000));
         }
 
-        savedCount++;
-        if (captureResult?.synced) syncedCount++;
-
-        await addToTotals(1, captureResult?.synced ? 1 : 0);
+        // Only count it as saved if a capture attempt actually succeeded —
+        // previously this incremented unconditionally, so the reported
+        // "N saved" count included chats that failed every retry and were
+        // never written to storage or synced.
+        if (captureResult?.status === 'saved' || captureResult?.status === 'skipped') {
+          savedCount++;
+          if (captureResult?.synced) syncedCount++;
+          await addToTotals(1, captureResult?.synced ? 1 : 0);
+        } else {
+          failedCount++;
+          console.warn(`[Brain Shadow] ${platform} capture failed for "${title}" after 3 attempts:`, captureResult);
+        }
 
       } catch (e) {
+        failedCount++;
         console.error(`[Brain Shadow] ${platform} error:`, e.message);
       }
 
@@ -180,8 +194,10 @@ async function scrapePlatform(platform, baseUrl) {
     }
 
     await setSessionProgress(platform, {
-      running: false, done: true, pct: 100, savedCount, syncedCount,
-      title: `Done — ${savedCount} saved · ${syncedCount} synced`,
+      running: false, done: true, pct: 100, savedCount, syncedCount, failedCount,
+      title: failedCount > 0
+        ? `Done — ${savedCount} saved · ${syncedCount} synced · ${failedCount} failed`
+        : `Done — ${savedCount} saved · ${syncedCount} synced`,
     });
 
   } catch (err) {

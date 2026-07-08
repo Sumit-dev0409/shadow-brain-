@@ -57,16 +57,19 @@ interface ObsidianGraphProps {
   searchKeyword: string;
   /** Map from node ID → platform hex color for nodes that have matching chat history */
   highlightedNodes?: Map<number, string>;
+  /** Map from node ID → short date label e.g. "Jun 18" */
+  nodeDates?: Map<number, string>;
   onNodeClick?: (nodeId: number, keyword: string) => void;
 }
 
-export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: ObsidianGraphProps) {
+export function ObsidianGraph({ searchKeyword, highlightedNodes, nodeDates, onNodeClick }: ObsidianGraphProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const nodesRef = useRef<Node[]>([]);
   const frameRef = useRef<number>(0);
   const timeRef = useRef<number>(0);
   const searchRef = useRef<string>("");
   const highlightedNodesRef = useRef<Map<number, string>>(new Map());
+  const nodeDatesRef = useRef<Map<number, string>>(new Map());
   const nodePositionsRef = useRef<Map<number, { x: number; y: number; radius: number }>>(new Map());
   const initSizeRef = useRef<{ w: number; h: number }>({ w: 1, h: 1 });
 
@@ -315,6 +318,40 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
         ctx.restore();
       }
 
+      // Date labels for highlighted nodes
+      if (hasSearch) {
+        const dates = nodeDatesRef.current;
+        ctx.save();
+        ctx.font = "bold 9px Inter, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        for (let i = 0; i < nodes.length; i++) {
+          const node = nodes[i];
+          if (!node.highlighted) continue;
+          const label = dates.get(node.id);
+          if (!label) continue;
+
+          const lx = node.x;
+          const ly = node.y - node.radius * 2.2 - 4;
+
+          // Pill background
+          const tw = ctx.measureText(label).width;
+          const pw = tw + 8;
+          const ph = 13;
+          ctx.save();
+          ctx.globalAlpha = 0.82;
+          ctx.fillStyle = node.highlightColor;
+          ctx.beginPath();
+          ctx.roundRect(lx - pw / 2, ly - ph, pw, ph, 4);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = "#07090f";
+          ctx.fillText(label, lx, ly - 1);
+          ctx.restore();
+        }
+        ctx.restore();
+      }
+
       // Center glow orb
       const centerGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 80);
       centerGlow.addColorStop(0, "rgba(79,138,255,0.18)");
@@ -449,6 +486,11 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, onNodeClick }: 
   useEffect(() => {
     highlightedNodesRef.current = highlightedNodes ?? new Map();
   }, [highlightedNodes]);
+
+  // Sync node date labels map
+  useEffect(() => {
+    nodeDatesRef.current = nodeDates ?? new Map();
+  }, [nodeDates]);
 
   // Returns the nodeId under the mouse, or null
   const hitTest = useCallback((e: React.MouseEvent<HTMLCanvasElement>): number | null => {
