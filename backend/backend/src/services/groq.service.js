@@ -4,11 +4,24 @@ const logger = require('../utils/logger');
 
 class GroqService {
   constructor() {
-    this.client = new OpenAI({
-      apiKey:  config.apiKey,
-      baseURL: config.baseUrl,
-      timeout: 30000,
-    });
+    // Lazy: don't touch the OpenAI SDK at construction time. It throws
+    // immediately if apiKey is missing, and this service is instantiated
+    // once as a module-level singleton — an unset GROQ_API_KEY (e.g. when
+    // running on the Cerebras fallback only) would otherwise crash the
+    // whole process at require-time, before any request ever needs Groq.
+    this._client = null;
+  }
+
+  get client() {
+    if (!this._client) {
+      if (!config.apiKey) throw new Error('No Groq API key configured');
+      this._client = new OpenAI({
+        apiKey:  config.apiKey,
+        baseURL: config.baseUrl,
+        timeout: 30000,
+      });
+    }
+    return this._client;
   }
 
   async chat(messages, systemPrompt = null) {
