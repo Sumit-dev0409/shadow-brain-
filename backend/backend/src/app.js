@@ -18,6 +18,7 @@ const app = express();
 const allowedOrigins = (process.env.FRONTEND_URL || '')
   .split(',')
   .map((o) => o.trim())
+  .map((o) => o.replace(/\/$/, ''))
   .filter(Boolean);
 
 app.use(cors({
@@ -27,7 +28,7 @@ app.use(cors({
       origin.startsWith('chrome-extension://') ||
       origin.startsWith('http://localhost') ||
       origin.startsWith('http://127.0.0.1') ||
-      allowedOrigins.includes(origin)
+      allowedOrigins.includes(origin.replace(/\/$/, ''))
     ) {
       callback(null, true);
     } else {

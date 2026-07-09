@@ -1,36 +1,43 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Brain Shadow
 
-## Getting Started
+Brain Shadow is a Next.js frontend with a separate Express/MongoDB backend.
 
-First, run the development server:
+## Local Development
+
+Run the frontend from the repo root:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Run the backend from `backend/backend`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Use `.env.example` and `backend/backend/.env.example` as the variable templates.
 
-## Learn More
+## Railway Deployment
 
-To learn more about Next.js, take a look at the following resources:
+Create two Railway services from this repo.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Backend service:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- Root directory: `backend/backend`
+- Start command: `npm run start`
+- Health check path: `/health`
+- Add a Railway MongoDB plugin, or use MongoDB Atlas.
+- Set the variables from `backend/backend/.env.example`.
+- Set `MONGODB_URI` to the Railway MongoDB connection string. The backend also accepts Railway's `MONGO_URL` or a standard `DATABASE_URL`.
 
-## Deploy on Vercel
+Frontend service:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- Root directory: `.`
+- Start command: `npm run start`
+- Set the variables from `.env.example`.
+- Set `NEXT_PUBLIC_API_URL` and `BACKEND_URL` to the backend service public URL.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+After both services have public URLs, set the backend `FRONTEND_URL` variable to the frontend public URL. If you use Google sign-in, add the frontend URL to your Google OAuth authorized JavaScript origins.

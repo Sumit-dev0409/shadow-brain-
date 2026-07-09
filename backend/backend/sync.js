@@ -14,7 +14,7 @@ const path     = require('path');
 const fs       = require('fs');
 const os       = require('os');
 
-const MONGODB_URI = process.env.MONGODB_URI;
+const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.DATABASE_URL;
 const Conversation = require('./src/models/conversation.model');
 
 async function findExportFile() {
@@ -38,6 +38,10 @@ async function findExportFile() {
 
 async function main() {
   console.log('\n🧠 Brain Shadow — Sync Script\n');
+
+  if (!MONGODB_URI) {
+    throw new Error('Missing MongoDB connection string. Set MONGODB_URI, MONGO_URL, or DATABASE_URL.');
+  }
 
   // 1. Connect to MongoDB
   console.log('🔌 Connecting to MongoDB...');

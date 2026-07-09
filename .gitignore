@@ -4,6 +4,8 @@ node_modules/
 .vscode/
 *.log
 .env*
+!/.env.example
+!/backend/backend/.env.example
 *.tsbuildinfo
 .claude/settings.local.json
 

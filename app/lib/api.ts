@@ -113,7 +113,7 @@ export interface GoogleAuthUser {
 }
 
 export async function googleLogin(credential: string): Promise<GoogleAuthUser> {
-  const res = await fetch(`${API_BASE}/api/auth/google`, {
+  const res = await fetch(toApiUrl('/api/auth/google'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
