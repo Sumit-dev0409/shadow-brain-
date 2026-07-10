@@ -42,6 +42,10 @@ const conversationSchema = new mongoose.Schema(
       importanceScore: Number,
       enrichedAt: Date,
       version: String,
+      // messages.length at the time enrichment ran. Lets us tell a genuinely
+      // up-to-date summary apart from one that's stale because the
+      // conversation grew after it was last enriched.
+      messageCountAtEnrichment: Number,
     },
     error: {
       type: String,

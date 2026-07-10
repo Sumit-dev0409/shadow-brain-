@@ -71,6 +71,7 @@ function localEnrich(conversation) {
     enriched_at:        new Date(),
     enrichment_version: 'local-1.0',
     status:             'COMPLETED',
+    message_count:      messages.length,
   };
 }
 
@@ -96,7 +97,7 @@ async function extractMetadata(cleanedText, conversation) {
       const rawMetadata = parseJsonResponse(content);
       validateMetadata(rawMetadata);
       logger.info(`[ENRICHMENT] ${provider} succeeded`);
-      return { ...buildEnrichment(rawMetadata), enrichment_version: `1.0.0-${provider}` };
+      return { ...buildEnrichment(rawMetadata), enrichment_version: `1.0.0-${provider}`, message_count: conversation.messages.length };
     } catch (err) {
       if (isRateLimit(err.message)) {
         logger.warn(`[RATE LIMIT] ${provider} quota hit — switching to other provider`);
@@ -141,8 +142,19 @@ class EnrichmentService {
       return;
     }
 
-    if (this.hasUsableEnrichment(conversation) && conversation.status === 'COMPLETED') {
-      logger.info(`[ENRICHMENT SKIP] ${conversationId} already has enrichment data.`);
+    // Only skip if enrichment exists AND the conversation hasn't grown since —
+    // this used to skip unconditionally once a conversation was ever
+    // enriched, so re-captures that added new messages (e.g. a continued
+    // chat) would keep their summary/topic frozen at the original content
+    // forever, even though messages itself was correctly getting updated.
+    const currentCount = (conversation.messages || []).length;
+    const enrichedAtCount = conversation.enrichment?.messageCountAtEnrichment;
+    if (
+      this.hasUsableEnrichment(conversation) &&
+      conversation.status === 'COMPLETED' &&
+      enrichedAtCount === currentCount
+    ) {
+      logger.info(`[ENRICHMENT SKIP] ${conversationId} already has enrichment data for current message count (${currentCount}).`);
       return;
     }
 

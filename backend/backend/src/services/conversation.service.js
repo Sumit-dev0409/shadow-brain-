@@ -90,6 +90,7 @@ class ConversationService {
       'enrichment.importanceScore': enrichment.importance_score,
       'enrichment.enrichedAt':      enrichment.enriched_at,
       'enrichment.version':         enrichment.enrichment_version,
+      'enrichment.messageCountAtEnrichment': enrichment.message_count,
       // Also write to metadata (snake_case) for backward compat
       'metadata.topic':               enrichment.topic,
       'metadata.category':            enrichment.category,

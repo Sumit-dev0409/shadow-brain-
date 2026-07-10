@@ -135,11 +135,31 @@ async function scrapePlatform(platform, baseUrl) {
       return;
     }
 
-    // Filter already-captured conversations
+    // Filter already-captured conversations — but only skip ones captured
+    // recently. Without a freshness window, a conversation captured once
+    // was excluded from every future bulk import forever, even after the
+    // user kept chatting in it — so its message count and enrichment in the
+    // DB would stay frozen at whatever it was on the very first capture,
+    // no matter how much the real conversation grew afterward.
+    const RECAPTURE_AFTER_MS = 6 * 60 * 60 * 1000; // re-check anything older than 6h
     const existing = await getAllConversations();
-    const capturedPaths = new Set(existing.map(c => { try { return new URL(c.url).pathname; } catch { return c.url; } }));
-    const newThreads   = threads.filter(t => { try { return !capturedPaths.has(new URL(t.url).pathname); } catch { return true; } });
-    const skipped      = threads.length - newThreads.length;
+    const capturedPaths = new Map();
+    for (const c of existing) {
+      try {
+        const path   = new URL(c.url).pathname;
+        const savedAt = new Date(c.saved_at || 0).getTime();
+        const prev    = capturedPaths.get(path);
+        if (!prev || savedAt > prev) capturedPaths.set(path, savedAt);
+      } catch { /* skip unparseable URLs — treat as not captured */ }
+    }
+    const now = Date.now();
+    const newThreads = threads.filter(t => {
+      try {
+        const savedAt = capturedPaths.get(new URL(t.url).pathname);
+        return savedAt === undefined || (now - savedAt) > RECAPTURE_AFTER_MS;
+      } catch { return true; }
+    });
+    const skipped = threads.length - newThreads.length;
 
     if (!newThreads.length) {
       await setSessionProgress(platform, { running: false, done: true, pct: 100, skipped, title: `All ${threads.length} already captured` });
