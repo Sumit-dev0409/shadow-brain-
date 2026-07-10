@@ -31,7 +31,7 @@ function chatgptConfig() {
     platform:   'chatgpt',
     convUrlRe:  /\/c\/([a-zA-Z0-9_\-]{4,})/,
     userSel:    ['[data-message-author-role="user"]'],
-    asstSel:    ['[data-message-author-role="assistant"]', '.markdown', '[class*="prose"]'],
+    asstSel:    ['[data-message-author-role="assistant"]'],
     streaming:  ['button[data-testid="stop-button"]', 'button[aria-label="Stop generating"]', '.result-streaming'],
     extractId:  url => url.match(/\/c\/([\w\-]+)/)?.[1] || url,
     titleClean: t => t.replace(' - ChatGPT', '').replace(' | ChatGPT', ''),
@@ -43,7 +43,7 @@ function claudeConfig() {
     platform:   'claude',
     convUrlRe:  /\/(?:chat|c|conversation)\/([a-zA-Z0-9_\-]{4,})/,
     userSel:    ['[data-testid*="human"]', '[data-testid*="user"]', '[class*="humanMessage"]'],
-    asstSel:    ['[data-testid*="assistant"]', '[class*="assistantMessage"]', '[class*="prose"]'],
+    asstSel:    ['[data-testid*="assistant"]', '[class*="assistantMessage"]'],
     streaming:  ['button[aria-label="Stop generating"]', '[data-testid="stop-button"]'],
     extractId:  url => { const m = url.match(/\/(?:chat|c|conversation)\/([\w\-]+)/); return m?.[1] || url; },
     titleClean: t => t.replace(' - Claude', '').replace(' | Claude', ''),
@@ -91,7 +91,7 @@ function mscopilotConfig() {
     platform:   'copilot',
     convUrlRe:  /\/(?:c|chats|chat|thread|threads|conversation|conversations)\/([a-zA-Z0-9_\-]{4,})/,
     userSel:    ['[data-testid*="user-message"]', '[class*="userMessage"]', '[aria-label*="You said" i]'],
-    asstSel:    ['[data-testid*="copilot-message"]', '[class*="copilotMessage"]', '[class*="BotBubble"]', '[class*="markdown"]'],
+    asstSel:    ['[data-testid*="copilot-message"]', '[class*="copilotMessage"]', '[class*="BotBubble"]'],
     streaming:  ['button[aria-label="Stop responding"]', '[class*="stopButton"]', '.typing-indicator'],
     extractId:  url => { try { const m = new URL(url).pathname.match(/\/(?:c|chats|chat|thread)\/([\w\-]+)/); return m?.[1] || new URL(url).searchParams.get('conversationId') || url; } catch { return url; } },
     titleClean: t => t.replace(' - Microsoft Copilot', '').replace(' | Copilot', ''),
@@ -174,7 +174,7 @@ function grokConfig() {
     platform:   'grok',
     convUrlRe:  /\/(?:chat|c|conversation|conversations)\/([a-zA-Z0-9_\-]{4,})/,
     userSel:    ['[data-testid*="user-message"]', '[class*="UserMessage"]', '[class*="userBubble"]'],
-    asstSel:    ['[data-testid*="grok-message"]', '[class*="GrokMessage"]', '[class*="AssistantMessage"]', '[class*="markdown"]'],
+    asstSel:    ['[data-testid*="grok-message"]', '[class*="GrokMessage"]', '[class*="AssistantMessage"]'],
     streaming:  ['button[aria-label="Stop generating"]', '[class*="StopButton"]', '[class*="thinking"]'],
     extractId:  url => { const m = url.match(/\/(?:chat|c|conversation)\/([\w\-]+)/); return m?.[1] || url; },
     titleClean: t => t.replace(' | Grok', '').replace(' - Grok', ''),
@@ -272,10 +272,35 @@ function init() {
     return messages.map((msg, i) => ({ ...msg, index: i, timestamp: new Date(now - (messages.length - 1 - i) * STEP).toISOString() }));
   }
 
-  function scrapeConversation() {
-    let userEls = [], asstEls = [];
-    for (const sel of (config.userSel || [])) { const f = [...document.querySelectorAll(sel)]; if (f.length) { userEls = f; break; } }
-    for (const sel of (config.asstSel || [])) { const f = [...document.querySelectorAll(sel)]; if (f.length) { asstEls = f; break; } }
+  // Union every configured selector's matches instead of only using whichever
+// selector happens to match first. Real chat UIs often render messages with
+// slightly different DOM structure depending on content (attachments, code
+// blocks, edited turns, etc.), so a single "first match wins" selector
+// silently drops any message that doesn't fit that one pattern. This also
+// makes the count consistent with PING's readiness check below, which
+// already unions all selectors via a single comma-joined query.
+function queryAllSelectors(selectors) {
+  const seen = new Set();
+  const out  = [];
+  for (const sel of (selectors || [])) {
+    let found;
+    try { found = document.querySelectorAll(sel); } catch { continue; }
+    for (const el of found) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      out.push(el);
+    }
+  }
+  // Guard against two configured selectors matching a message's outer
+  // container AND an inner content wrapper inside it (e.g. a message bubble
+  // plus a nested markdown div) — that would otherwise double-count the same
+  // message as two overlapping entries. Keep only outermost matches.
+  return out.filter(el => !out.some(other => other !== el && other.contains(el)));
+}
+
+function scrapeConversation() {
+    let userEls = queryAllSelectors(config.userSel);
+    let asstEls = queryAllSelectors(config.asstSel);
 
     // Container fallback
     if (!userEls.length && !asstEls.length) {
