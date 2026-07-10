@@ -13,8 +13,14 @@ const cerebrasClient = process.env.CEREBRAS_API_KEY
     })
   : null;
 
-// qwen-3-32b: high-quality, ~14,400 req/day free on Cerebras
-const CEREBRAS_MODEL = 'qwen-3-32b';
+// qwen-3-32b was deprecated/removed from Cerebras (every request 404'd —
+// confirmed via /v1/models, it's no longer in their catalog). Their other
+// two current models (gpt-oss-120b, zai-glm-4.7) are reasoning models that
+// spend the token budget on hidden "thinking" before any visible content,
+// which would starve this call's max_tokens: 450 and come back empty.
+// gemma-4-31b answers directly with no reasoning overhead — verified
+// against the actual JSON-extraction prompt this function sends.
+const CEREBRAS_MODEL = 'gemma-4-31b';
 
 function isRateLimit(msg = '') {
   return msg.includes('429') || msg.toLowerCase().includes('rate limit');
