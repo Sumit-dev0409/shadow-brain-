@@ -14,7 +14,7 @@ const STORAGE_KEY  = 'brain_shadow_conversations';
 const META_KEY     = 'brain_shadow_meta';
 const BACKEND_KEY  = 'brain_shadow_backend_url';
 const PROGRESS_KEY = 'brain_shadow_scrape_progress';
-const DEFAULT_BACKEND = 'http://localhost:8000';
+const DEFAULT_BACKEND = 'https://shadow-brain-u4ua.onrender.com';
 
 // ── Keep service worker alive during scraping ──────────────
 let keepAliveTimer = null;

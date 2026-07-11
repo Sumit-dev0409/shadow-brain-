@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 
-const BACKEND = process.env.BACKEND_URL || 'http://localhost:8000';
+const BACKEND = process.env.BACKEND_URL || 'https://shadow-brain-u4ua.onrender.com';
 
 // POST /api/chat — proxies to backend /api/chat (OpenRouter)
 export async function POST(request: NextRequest) {
