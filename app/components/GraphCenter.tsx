@@ -933,7 +933,7 @@ onNodeClick={handleNodeClick}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ duration: 0.25 }}
-                className="relative w-full h-full max-w-5xl max-h-[88vh] rounded-2xl overflow-hidden"
+                className="relative w-full h-full max-w-5xl max-h-[88vh] rounded-2xl overflow-hidden flex flex-col"
                 style={{
                   background: "rgba(7,9,15,0.96)",
                   border: "1px solid var(--border-subtle)",
@@ -978,7 +978,7 @@ onNodeClick={handleNodeClick}
                       </button>
                     )}
                     <button
-                      onClick={() => setPanelDismissed(true)}
+                      onClick={() => { setConversationPopupOpen(false); handleUnpin(); }}
                       className="flex-shrink-0 p-1 rounded"
                       style={{ color: "var(--text-muted)" }}
                     >
@@ -1003,75 +1003,6 @@ onNodeClick={handleNodeClick}
 
                 {/* Scrollable content */}
                 <div className="flex-1 overflow-y-auto">
-
-                  {/* AI Answer block — always at top when search is active */}
-                  <div
-                    className="px-4 pt-4 pb-3"
-                    style={{ borderBottom: "1px solid var(--border-subtle)" }}
-                  >
-                    <div className="flex items-center gap-1.5 mb-2">
-                      <Sparkles size={12} style={{ color: "#8b5cf6" }} />
-                      <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8b5cf6" }}>
-                        AI Memory Answer
-                      </span>
-                    </div>
-
-                    {aiLoading ? (
-                      <div className="flex items-center gap-2 py-2">
-                        <Loader2 size={13} className="animate-spin" style={{ color: "var(--text-muted)" }} />
-                        <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>Searching memory…</span>
-                      </div>
-                    ) : aiAnswer ? (
-                      <>
-                        <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>
-                          {aiAnswer}
-                        </p>
-
-                        {/* Source cards — platform, date, summary */}
-                        {aiSources.length > 0 && (
-                          <div className="flex flex-col gap-2 mt-3">
-                            <span className="text-[9px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
-                              Sources ({aiSources.length})
-                            </span>
-                            {aiSources.map((src) => {
-                              const color = src.platform ? PLATFORM_COLORS[src.platform] ?? "#4f8aff" : "#4f8aff";
-                              const label = src.platform ? PLATFORM_LABELS[src.platform] ?? src.platform : "";
-                              return (
-                                <div
-                                  key={src.id}
-                                  className="rounded-lg px-3 py-2"
-                                  style={{
-                                    background: `${color}10`,
-                                    border: `1px solid ${color}28`,
-                                  }}
-                                >
-                                  <p className="text-[10px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>
-                                    {src.title}
-                                  </p>
-                                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                    {label && (
-                                      <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded" style={{ background: `${color}20`, color, border: `1px solid ${color}40` }}>
-                                        {label}
-                                      </span>
-                                    )}
-                                  </div>
-                                  {(src.summary || src.snippet) && (
-                                    <p className="text-[10px] leading-relaxed mt-1.5 line-clamp-3" style={{ color: "var(--text-secondary)" }}>
-                                      {src.summary || src.snippet}
-                                    </p>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-                        No memory answer yet — type to search.
-                      </p>
-                    )}
-                  </div>
 
                   {/* Session cards */}
                   <div className="p-4">
@@ -1140,42 +1071,6 @@ onNodeClick={handleNodeClick}
                             </div>
                           )}
 
-                          {/* Enrichment metadata — always show if available */}
-                          {(session.summary || session.topic || (session.keywords && session.keywords.length > 0)) && (
-                            <div
-                              className="px-3 py-2.5"
-                              style={{ background: `${platformColor}08`, borderBottom: "1px solid var(--border-subtle)" }}
-                            >
-                              {session.topic && (
-                                <p className="text-[10px] font-semibold mb-1" style={{ color: platformColor }}>
-                                  {session.topic}
-                                </p>
-                              )}
-                              {session.summary && (
-                                <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-                                  {session.summary}
-                                </p>
-                              )}
-                              {session.keywords && session.keywords.length > 0 && (
-                                <div className="flex flex-wrap gap-1 mt-1.5">
-                                  {session.keywords.slice(0, 6).map((kw) => (
-                                    <span
-                                      key={kw}
-                                      className="text-[9px] px-1.5 py-0.5 rounded-full"
-                                      style={{
-                                        background: `${platformColor}18`,
-                                        color: "var(--text-secondary)",
-                                        border: `1px solid ${platformColor}22`,
-                                      }}
-                                    >
-                                      {kw}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
-
                           {/* Messages */}
                           {session.messages.length === 0 ? (
                             <div className="px-4 py-6 text-center">
@@ -1192,10 +1087,7 @@ onNodeClick={handleNodeClick}
                             </div>
                           ) : (
                             <div className="flex flex-col gap-3 p-3">
-                              {session.messages.filter((msg: Message) => {
-                                const content = (msg.content || "").trim();
-                                return content && content.toLowerCase().includes(kw);
-                              }).map((msg: Message) => {
+                              {session.messages.map((msg: Message) => {
                                 const content = (msg.content || "").trim();
                                 const isUser = msg.role === "user";
                                 return (

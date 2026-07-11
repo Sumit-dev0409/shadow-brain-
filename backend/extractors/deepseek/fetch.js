@@ -132,12 +132,53 @@ function extractDeepSeekId(url) {
   } catch { return url; }
 }
 
+function findConversationContainer(asstEls) {
+  if (!asstEls || !asstEls.length) return null;
+  let card = asstEls[0];
+  let container = card.parentElement;
+  const isAssistant = (el) => asstEls.some(ae => el === ae || el.contains(ae));
+  while (container && container !== document.body) {
+    const siblings = [...container.children];
+    const hasUserSibling = siblings.some(sib => !isAssistant(sib) && sib.innerText?.trim().length > 3);
+    if (hasUserSibling) return { container, card };
+    card = container;
+    container = container.parentElement;
+  }
+  return null;
+}
+
 // ── Core scraper ───────────────────────────────────────────
 function scrapeConversation() {
   let userEls = [], asstEls = [];
 
   for (const sel of USER_SEL) { const f = [...document.querySelectorAll(sel)]; if (f.length) { userEls = f; break; } }
   for (const sel of ASST_SEL) { const f = [...document.querySelectorAll(sel)]; if (f.length) { asstEls = f; break; } }
+
+  // Sibling & LCA fallback (dynamic layouts)
+  if (asstEls.length > 0 && userEls.length === 0) {
+    const found = findConversationContainer(asstEls);
+    if (found) {
+      const { container } = found;
+      const children = [...container.children];
+      const newUserEls = [];
+      const newAsstEls = [];
+      for (const child of children) {
+        const isAsst = asstEls.some(ae => child === ae || child.contains(ae));
+        const text = child.innerText?.trim();
+        if (!text || text.length <= 1) continue;
+        if (isAsst) {
+          const myAsst = asstEls.filter(ae => child === ae || child.contains(ae));
+          newAsstEls.push(...myAsst);
+        } else {
+          newUserEls.push(child);
+        }
+      }
+      if (newUserEls.length > 0) {
+        userEls = newUserEls;
+        asstEls = newAsstEls;
+      }
+    }
+  }
 
   if (!userEls.length && !asstEls.length) {
     for (const sel of ['[class*="chatContent"]','[class*="messageList"]','[class*="conversationContent"]','main']) {
@@ -153,7 +194,12 @@ function scrapeConversation() {
   const allItems = [
     ...userEls.map(el => ({ el, role: 'user' })),
     ...asstEls.map(el => ({ el, role: 'assistant' })),
-  ].sort((a, b) => a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+  ].sort((a, b) => {
+    const pos = a.el.compareDocumentPosition(b.el);
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return -1;
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return 1;
+    return 0;
+  });
 
   let messages = allItems
     .map(({ el, role }) => { const content = el.innerText?.trim(); return content && content.length > 3 ? { role, content } : null; })

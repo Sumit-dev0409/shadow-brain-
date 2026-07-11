@@ -77,19 +77,15 @@ async function navigateTab(tabId, url, extraMs = 1500) {
 }
 
 async function waitForContentScript(tabId, maxMs = 20000) {
-  const start = Date.now(); let lastCount = -1, stable = 0;
+  const start = Date.now(); let lastCount = -1, stable = 0, zeroStable = 0;
   while (Date.now() - start < maxMs) {
     try {
       const r = await tabMessage(tabId, { type: 'PING' });
       if (r?.pong) {
         const n = r.messageCount || 0;
-        // Require an actual (non-zero) message count before declaring "stable" —
-        // a freshly navigated tab reports 0 for the first second or two, and a
-        // background/inactive tab (throttled by Chrome) can stay at 0 far longer
-        // while it's still hydrating. Treating that as "ready" caused captures
-        // to fire on a blank page and silently fail.
         if (n > 0 && n === lastCount) { stable++; if (stable >= 3) return; }
-        else { stable = 0; lastCount = n; }
+        else if (n === 0) { zeroStable++; if (zeroStable >= 5) return; lastCount = n; }
+        else { stable = 0; zeroStable = 0; lastCount = n; }
       }
     } catch {}
     await new Promise(r => setTimeout(r, 1000));
@@ -145,10 +141,10 @@ async function scrapePlatform(platform, baseUrl) {
       await setSessionProgress(platform, { running: false, done: true, pct: 100, skipped, title: `All ${threads.length} already captured` });
       return;
     }
+  await setSessionProgress(platform, {
+    total: newThreads.length, skipped, title: `Found ${newThreads.length} new chats` });
 
-    await setSessionProgress(platform, { total: newThreads.length, skipped, title: `Found ${newThreads.length} new chats` });
-
-    let savedCount = 0, syncedCount = 0, failedCount = 0;
+    let savedCount = 0, syncedCount = 0, duplicateCount = 0, failedCount = 0, skippedCount = 0;
 
     for (let i = 0; i < newThreads.length; i++) {
       // Check this session's stop flag (not global — each session has its own)
@@ -158,8 +154,10 @@ async function scrapePlatform(platform, baseUrl) {
       const { url, title } = newThreads[i];
       const pct = Math.round(((i + 1) / newThreads.length) * 100);
 
-      await setSessionProgress(platform, { current: i + 1, pct, title });
+      await setSessionProgress(platform, { current: i + 1, pct, title, savedCount, duplicateCount, failedCount, skippedCount });
       chrome.action.setBadgeText({ text: `${pct}%` });
+
+      console.log(`[${platform}] Moving to next conversation (${i+1}/${newThreads.length}): "${title}"`);
 
       try {
         await navigateTab(tabId, url, 1500);
@@ -167,41 +165,52 @@ async function scrapePlatform(platform, baseUrl) {
 
         let captureResult = null;
         for (let attempt = 0; attempt < 3; attempt++) {
+          console.log(`[${platform}] Capture attempt ${attempt+1}/3 for: "${title}"`);
           captureResult = await tabMessage(tabId, { type: 'CAPTURE_CURRENT' });
-          if (captureResult?.status === 'saved' || captureResult?.status === 'skipped') break;
+          if (captureResult?.status === 'saved' || captureResult?.status === 'skipped' || captureResult?.status === 'empty') break;
           await new Promise(r => setTimeout(r, 2000));
         }
 
-        // Only count it as saved if a capture attempt actually succeeded —
-        // previously this incremented unconditionally, so the reported
-        // "N saved" count included chats that failed every retry and were
-        // never written to storage or synced.
-        if (captureResult?.status === 'saved' || captureResult?.status === 'skipped') {
+        const status = captureResult?.status || 'unknown';
+        const reason = captureResult?.reason || '';
+
+        if (status === 'saved') {
           savedCount++;
           if (captureResult?.synced) syncedCount++;
           await addToTotals(1, captureResult?.synced ? 1 : 0);
+          console.log(`[${platform}] Conversation saved: "${title}" | chatCount=${savedCount} | msgCount=${captureResult?.message_count || 0} | synced=${!!captureResult?.synced}`);
+        } else if (status === 'skipped' && reason === 'duplicate') {
+          // Auto-capture (from waitForChatAndObserve 3.5s timeout) saved it first
+          duplicateCount++;
+          savedCount++;
+          console.log(`[${platform}] Duplicate (auto-captured): "${title}" | chatCount=${savedCount} | msgCount=${captureResult?.message_count || 0}`);
+        } else if (status === 'skipped') {
+          skippedCount++;
+          console.log(`[${platform}] Skipped: "${title}" — ${reason || 'no reason'}`);
         } else {
           failedCount++;
-          console.warn(`[Brain Shadow] ${platform} capture failed for "${title}" after 3 attempts:`, captureResult);
+          console.warn(`[${platform}] Capture failed for "${title}": ${status}${reason ? ' ('+reason+')' : ''}`);
         }
+
+        console.log(`[${platform}] Chat count updated: ${savedCount} saved · ${duplicateCount} duplicates · ${failedCount} failed`);
 
       } catch (e) {
         failedCount++;
-        console.error(`[Brain Shadow] ${platform} error:`, e.message);
+        console.error(`[${platform}] Error: ${e.message}`);
       }
 
       await new Promise(r => setTimeout(r, 150));
     }
 
     await setSessionProgress(platform, {
-      running: false, done: true, pct: 100, savedCount, syncedCount, failedCount,
-      title: failedCount > 0
-        ? `Done — ${savedCount} saved · ${syncedCount} synced · ${failedCount} failed`
-        : `Done — ${savedCount} saved · ${syncedCount} synced`,
+      running: false, done: true, pct: 100, savedCount, syncedCount, duplicateCount, failedCount, skippedCount,
+      title: `Done — ${savedCount} saved · ${syncedCount} synced · ${duplicateCount} duplicates · ${failedCount} failed`,
     });
 
+    console.log(`[${platform}] Scraping finished: ${savedCount} saved · ${syncedCount} synced · ${duplicateCount} duplicates · ${failedCount} failed`);
+
   } catch (err) {
-    console.error(`[Brain Shadow] ${platform} scrape failed:`, err.message);
+    console.error(`[${platform}] Scrape failed:`, err.message);
     await setSessionProgress(platform, { running: false, done: true, title: `Error: ${err.message}` });
   } finally {
     if (tabId) chrome.tabs.remove(tabId).catch(() => {});
@@ -230,17 +239,30 @@ async function scrapePlatform(platform, baseUrl) {
 // ── Save conversation ──────────────────────────────────────
 async function saveConversation(data, source = 'realtime') {
   try {
+    const platform      = data.platform || 'unknown';
+    const external_id   = data.external_id || '';
+    const messageCount  = data.messages?.length || 0;
     const result        = await chrome.storage.local.get(STORAGE_KEY);
     const conversations = result[STORAGE_KEY] || {};
-    const key           = `${data.platform}_${data.external_id}`;
+    const key           = `${platform}_${external_id}`;
     const existing      = conversations[key];
 
-    if (source === 'bulk' && existing && existing.messages.length >= data.messages.length)
-      return { status: 'skipped', reason: 'no_change' };
+    console.log(`[${platform}] saveConversation: ID=${external_id} messages=${messageCount} source=${source} key=${key}`);
 
-    conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source, synced: false };
+    // Duplicate detection: if exact key already exists, skip
+    if (existing) {
+      console.log(`[${platform}] Duplicate detected — "${data.title}" (ID: ${external_id}) already exists with ${existing.messages?.length || 0} messages`);
+      return { status: 'skipped', reason: 'duplicate', key };
+    }
+
+    conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: messageCount, source, synced: false };
     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+    console.log(`[${platform}] About to updateMeta — totalKeys=${Object.keys(conversations).length}`);
     await updateMeta(conversations);
+    console.log(`[${platform}] Conversation saved: "${data.title}" (ID: ${external_id}, messages: ${messageCount})`);
+    console.log(`[${platform}] Chat count updated: ${Object.keys(conversations).length} total`);
+    console.log(`[${platform}] Message count updated: ${messageCount} messages in this conversation`);
+    console.log(`[${platform}] Platform count updated`);
 
     // Sync to backend immediately (fire and forget — local save already succeeded)
     const syncResult = await syncToBackend(data);
@@ -249,9 +271,10 @@ async function saveConversation(data, source = 'realtime') {
       await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
     }
 
-    console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴' : '📦'} saved: ${data.title} | synced: ${syncResult.ok}`);
+    console.log(`[${platform}] Save result: saved | synced: ${syncResult.ok}`);
     return { status: 'saved', key, synced: syncResult.ok };
   } catch (err) {
+    console.error(`[${data?.platform || 'unknown'}] Save error: ${err.message}`);
     return { status: 'error', error: err.message };
   }
 }
@@ -285,6 +308,7 @@ async function updateMeta(conversations) {
     platforms[conv.platform] = (platforms[conv.platform] || 0) + 1;
     totalMessages += conv.message_count || 0;
   });
+  console.log(`[updateMeta] platforms=${JSON.stringify(platforms)} totalConvs=${allConvs.length} totalMsgs=${totalMessages}`);
   await chrome.storage.local.set({
     [META_KEY]: { total_conversations: allConvs.length, total_messages: totalMessages, platforms, last_updated: new Date().toISOString() },
   });
@@ -363,28 +387,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.get(BACKEND_KEY).then(r => sendResponse({ url: r[BACKEND_KEY] || DEFAULT_BACKEND })); return true;
   }
   if (message.type === 'TEST_BACKEND') { testBackend(message.url).then(sendResponse); return true; }
-
-  // Sync ALL local conversations to backend (runs in SW — survives popup close)
-  if (message.type === 'SYNC_ALL_TO_BACKEND') {
-    (async () => {
-      const r          = await chrome.storage.local.get([STORAGE_KEY, BACKEND_KEY]);
-      const convs      = Object.values(r[STORAGE_KEY] || {});
-      const backendUrl = (r[BACKEND_KEY] || DEFAULT_BACKEND).replace(/\/$/, '');
-      let synced = 0, failed = 0;
-      for (const conv of convs) {
-        const result = await syncToBackend(conv).catch(err => ({ ok: false, error: err.message }));
-        if (result.ok) {
-          synced++;
-        } else {
-          failed++;
-          console.warn(`[Brain Shadow] Sync failed for "${conv.title}" (${conv.platform}):`, result.error);
-        }
-      }
-      console.log(`[Brain Shadow] SYNC_ALL_TO_BACKEND: ${synced}/${convs.length} synced, ${failed} failed`);
-      sendResponse({ synced, failed, total: convs.length });
-    })();
-    return true;
-  }
 });
 
 // Clear stale "running" sessions on SW restart
@@ -398,22 +400,5 @@ chrome.storage.local.get(PROGRESS_KEY).then(r => {
   chrome.storage.local.set({ [PROGRESS_KEY]: cleaned });
   chrome.action.setBadgeText({ text: '' });
 });
-
-// On every SW startup: push all locally stored conversations to backend
-(async () => {
-  try {
-    const r          = await chrome.storage.local.get([STORAGE_KEY, BACKEND_KEY]);
-    const convs      = Object.values(r[STORAGE_KEY] || {});
-    if (!convs.length) return;
-    const backendUrl = (r[BACKEND_KEY] || DEFAULT_BACKEND).replace(/\/$/, '');
-    // Test backend first
-    const health = await fetch(`${backendUrl}/health`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
-    if (!health?.ok) return;
-    for (const conv of convs) {
-      await syncToBackend(conv).catch(() => {});
-    }
-    console.log(`[Brain Shadow] Startup sync: pushed ${convs.length} conversations`);
-  } catch {}
-})();
 
 console.log('[Brain Shadow] Universal background service worker started');
