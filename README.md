@@ -1,43 +1,149 @@
-# Brain Shadow
+# 🧠 Brain Shadow
 
-Brain Shadow is a Next.js frontend with a separate Express/MongoDB backend.
+Brain Shadow is an AI-powered knowledge management platform that captures, organizes, and visualizes conversations from multiple AI platforms. It provides semantic search, conversation management, and an interactive knowledge graph inspired by Obsidian.
 
-## Local Development
+## 🚀 Live Demo
 
-Run the frontend from the repo root:
+🔗 **Project: https://shadow-brain-4lux.vercel.app/
+
+
+## ✨ Features
+
+* AI conversation management
+* Semantic search across conversations
+* Interactive Obsidian-style knowledge graph
+* Responsive and modern UI
+* MongoDB database integration
+* REST API backend
+* Real-time data synchronization
+
+---
+
+## 🛠️ Tech Stack
+
+### Frontend
+
+* Next.js
+* React.js
+* Tailwind CSS
+
+### Backend
+
+* Node.js
+* Express.js
+
+### Database
+
+* MongoDB
+
+---
+
+## 📂 Project Structure
+
+```
+Brain-Shadow/
+│
+├── frontend/
+│   ├── app/
+│   ├── components/
+│   ├── public/
+│   └── styles/
+│
+├── backend/
+│   ├── controllers/
+│   ├── models/
+│   ├── routes/
+│   ├── middleware/
+│   └── services/
+│
+└── README.md
+```
+
+---
+
+## ⚙️ Installation
+
+### Clone the repository
+
+```bash
+git clone <your-repository-url>
+```
+
+### Install dependencies
+
+Frontend
 
 ```bash
 npm install
-npm run dev
 ```
 
-Run the backend from `backend/backend`:
+Backend
 
 ```bash
 npm install
+```
+
+---
+
+## ▶️ Run the Project
+
+Frontend
+
+```bash
 npm run dev
 ```
 
-Use `.env.example` and `backend/backend/.env.example` as the variable templates.
+Backend
 
-## Railway Deployment
+```bash
+npm run dev
+```
 
-Create two Railway services from this repo.
+---
 
-Backend service:
+## 💻 Skills & Technologies
 
-- Root directory: `backend/backend`
-- Start command: `npm run start`
-- Health check path: `/health`
-- Add a Railway MongoDB plugin, or use MongoDB Atlas.
-- Set the variables from `backend/backend/.env.example`.
-- Set `MONGODB_URI` to the Railway MongoDB connection string. The backend also accepts Railway's `MONGO_URL` or a standard `DATABASE_URL`.
+* React.js
+* Next.js
+* Node.js
+* Express.js
+* MongoDB
+* Tailwind CSS
+* REST API
+* JavaScript (ES6+)
 
-Frontend service:
+---
 
-- Root directory: `.`
-- Start command: `npm run start`
-- Set the variables from `.env.example`.
-- Set `NEXT_PUBLIC_API_URL` and `BACKEND_URL` to the backend service public URL.
+## 📸 Screenshots
 
-After both services have public URLs, set the backend `FRONTEND_URL` variable to the frontend public URL. If you use Google sign-in, add the frontend URL to your Google OAuth authorized JavaScript origins.
+<h3>Login page</h3>
+
+<img src="screen_shot\image2.png" width="800" alt="Home Page">
+
+<h3>Home Page</h3>
+
+<img src="screen_shot\image3.png" width="800" alt="Home Page">
+
+<h3>search function</h3>
+
+<img src="screen_shot\image4.png" width="800" alt="Home Page">
+
+<h3>node data</h3>
+
+<img src="screen_shot\image5.png" width="800" alt="Home Page">
+
+---
+
+## 👨‍💻 Author
+
+**Aman Anand**
+
+GitHub: https://github.com/your-github-username
+
+LinkedIn: https://linkedin.com/in/your-linkedin
+
+---
+
+## 📄 License
+
+This project is for learning and portfolio purposes.
