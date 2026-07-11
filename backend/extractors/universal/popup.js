@@ -51,6 +51,7 @@ async function testBackend(url) {
     const res = await fetch(`${backendUrl}/health`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     setBackendStatus('ok', '✓ Backend connected — syncing all chats…');
+    // Sync all unsynced conversations directly from popup context
     await syncAllToBackend(backendUrl);
     return true;
   } catch (err) {
@@ -60,24 +61,28 @@ async function testBackend(url) {
   }
 }
 
-async function syncAllToBackend(_backendUrl) {
-  // Delegate to background service worker so sync completes even if popup closes
-  try {
-    const result = await chrome.runtime.sendMessage({ type: 'SYNC_ALL_TO_BACKEND' });
-    if (!result) return;
-    if (result.synced > 0) {
-      setBackendStatus('ok', `✓ Synced ${result.synced} / ${result.total} chats to MongoDB`);
-      showToast(`Synced ${result.synced} chats to MongoDB ✅`, 'success');
-      await loadStats();
-      await loadRecentConversations();
-    } else if (result.total > 0) {
-      setBackendStatus('error', `✗ 0/${result.total} synced — check backend logs`);
-    }
-    if (result.failed > 0) {
-      console.warn(`[Brain Shadow] ${result.failed} conversations failed to sync — open background inspector for details`);
-    }
-  } catch (e) {
-    console.warn('[Brain Shadow] syncAllToBackend error:', e.message);
+async function syncAllToBackend(backendUrl) {
+  const convs = await chrome.runtime.sendMessage({ type: 'GET_ALL_CONVERSATIONS' });
+  if (!convs?.length) return;
+  // Only sync conversations that haven't been synced yet
+  const unsynced = convs.filter(c => !c.synced);
+  if (!unsynced.length) return;
+  let synced = 0;
+  for (const conv of unsynced) {
+    try {
+      const res = await fetch(`${backendUrl}/api/import/capture`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(conv),
+      });
+      if (res.ok) synced++;
+    } catch {}
+  }
+  if (synced > 0) {
+    setBackendStatus('ok', `✓ Synced ${synced} / ${convs.length} chats to MongoDB`);
+    showToast(`Synced ${synced} chats to MongoDB ✅`, 'success');
+    await loadStats();
+    await loadRecentConversations();
   }
 }
 
@@ -151,6 +156,16 @@ function renderProgress(prog) {
     document.getElementById('progressLabel').textContent =
       currentSess.running ? `Scraping ${PLATFORM_LABELS[currentPlatform] || currentPlatform}…` :
       currentSess.done    ? '✅ Done' : 'Starting…';
+    // Show saved/skipped/duplicate/failed detail
+    const detail = document.getElementById('progressDetail');
+    if (detail) {
+      const parts = [];
+      if (currentSess.savedCount > 0) parts.push(`${currentSess.savedCount} saved`);
+      if (currentSess.duplicateCount > 0) parts.push(`${currentSess.duplicateCount} duplicates`);
+      if (currentSess.skippedCount > 0) parts.push(`${currentSess.skippedCount} skipped`);
+      if (currentSess.failedCount > 0) parts.push(`${currentSess.failedCount} failed`);
+      detail.textContent = parts.join(' · ') || '';
+    }
   } else if (!anyRunning) {
     progSection.classList.remove('visible');
   }
