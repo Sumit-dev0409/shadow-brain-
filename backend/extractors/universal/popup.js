@@ -163,6 +163,7 @@ function renderProgress(prog) {
       if (currentSess.savedCount > 0) parts.push(`${currentSess.savedCount} saved`);
       if (currentSess.duplicateCount > 0) parts.push(`${currentSess.duplicateCount} duplicates`);
       if (currentSess.skippedCount > 0) parts.push(`${currentSess.skippedCount} skipped`);
+      if (currentSess.emptyCount > 0) parts.push(`${currentSess.emptyCount} empty`);
       if (currentSess.failedCount > 0) parts.push(`${currentSess.failedCount} failed`);
       detail.textContent = parts.join(' · ') || '';
     }
@@ -281,12 +282,18 @@ document.getElementById('btnCaptureCurrent').addEventListener('click', async () 
 document.getElementById('btnExport').addEventListener('click', async () => {
   const data = await chrome.runtime.sendMessage({ type: 'EXPORT_DATA' });
   if (!data?.conversations?.length) { showToast('No data to export', 'error'); return; }
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href = url; a.download = `${EXPORT_NAME}_${new Date().toISOString().split('T')[0]}.json`;
-  a.click(); URL.revokeObjectURL(url);
-  showToast(`Exported ${data.conversations.length} conversations`, 'success');
+  const blob  = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url   = URL.createObjectURL(blob);
+  const fname = `${EXPORT_NAME}_${new Date().toISOString().split('T')[0]}.json`;
+  // Use chrome.downloads API — a.click() in MV3 popups is unreliable
+  chrome.downloads.download({ url, filename: fname, saveAs: true }, (id) => {
+    URL.revokeObjectURL(url);
+    if (chrome.runtime.lastError || id === undefined) {
+      showToast(`Export failed: ${chrome.runtime.lastError?.message || 'unknown error'}`, 'error');
+    } else {
+      showToast(`Exported ${data.conversations.length} conversations`, 'success');
+    }
+  });
 });
 
 // ── Clear Data ─────────────────────────────────────────────

@@ -15,6 +15,8 @@ const conversationSchema = new mongoose.Schema(
         'deepseek', 'blackbox', 'copilot', 'mscopilot',
         'perplexity', 'grok',
       ],
+      lowercase: true,
+      trim: true,
     },
     title: {
       type: String,

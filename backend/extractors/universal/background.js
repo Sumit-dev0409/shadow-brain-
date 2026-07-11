@@ -98,6 +98,17 @@ function tabMessage(tabId, msg) {
   });
 }
 
+// Wait until the content script's message listener is registered (responds to PING)
+async function waitForContentScriptReady(tabId, maxMs = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    const r = await tabMessage(tabId, { type: 'PING' });
+    if (r?.pong) return true;
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+}
+
 // ══════════════════════════════════════════════════════════
 // SCRAPE ONE PLATFORM — fully independent, own hidden tab
 // ══════════════════════════════════════════════════════════
@@ -118,24 +129,44 @@ async function scrapePlatform(platform, baseUrl) {
   let tabId = null;
   try {
     // Open hidden tab — user's current page is NOT touched
+    console.log(`[${platform}] Opening hidden tab: ${baseUrl}`);
     const tab = await new Promise(resolve => chrome.tabs.create({ url: baseUrl, active: false }, resolve));
     tabId = tab.id;
     await waitForTabLoad(tabId, 2500);
+    console.log(`[${platform}] Tab loaded (id=${tabId})`);
 
     await setSessionProgress(platform, { title: 'Reading sidebar…' });
 
+    // Tell the content script to suppress auto-capture during scrape mode
+    try { await tabMessage(tabId, { type: 'SET_SCRAPE_MODE', enabled: true }); } catch {}
+
+    // Wait until content script is ready before reading sidebar
+    const ready = await waitForContentScriptReady(tabId);
+    if (!ready) {
+      console.warn(`[${platform}] Content script did not respond to PING after ${15}s — aborting`);
+      await setSessionProgress(platform, { running: false, done: true, title: 'Content script not ready' });
+      return;
+    }
+
+    console.log(`[${platform}] Sending GET_SIDEBAR_CHATS...`);
     const threads = await tabMessage(tabId, { type: 'GET_SIDEBAR_CHATS' }) || [];
+    console.log(`[${platform}] GET_SIDEBAR_CHATS returned ${threads.length} threads`);
 
     if (!threads.length) {
-      await setSessionProgress(platform, { running: false, done: true, pct: 100, title: 'No conversations found' });
+      console.warn(`[${platform}] No conversations found in sidebar — scraping cannot proceed`);
+      console.warn(`[${platform}] Possible cause: Gemini DOM changed and extractRecents() cannot find <a> tags`);
+      await setSessionProgress(platform, { running: false, done: true, pct: 100, title: 'No conversations found — DOM may have changed' });
       return;
     }
 
     // Filter already-captured conversations
     const existing = await getAllConversations();
+    console.log(`[${platform}] Existing conversations in storage: ${existing.length}`);
     const capturedPaths = new Set(existing.map(c => { try { return new URL(c.url).pathname; } catch { return c.url; } }));
+    console.log(`[${platform}] Captured pathnames: ${[...capturedPaths].join(', ') || 'none'}`);
     const newThreads   = threads.filter(t => { try { return !capturedPaths.has(new URL(t.url).pathname); } catch { return true; } });
     const skipped      = threads.length - newThreads.length;
+    console.log(`[${platform}] After dedup: ${newThreads.length} new, ${skipped} already captured`);
 
     if (!newThreads.length) {
       await setSessionProgress(platform, { running: false, done: true, pct: 100, skipped, title: `All ${threads.length} already captured` });
@@ -144,7 +175,7 @@ async function scrapePlatform(platform, baseUrl) {
   await setSessionProgress(platform, {
     total: newThreads.length, skipped, title: `Found ${newThreads.length} new chats` });
 
-    let savedCount = 0, syncedCount = 0, duplicateCount = 0, failedCount = 0, skippedCount = 0;
+    let savedCount = 0, syncedCount = 0, duplicateCount = 0, failedCount = 0, skippedCount = 0, emptyCount = 0;
 
     for (let i = 0; i < newThreads.length; i++) {
       // Check this session's stop flag (not global — each session has its own)
@@ -154,25 +185,32 @@ async function scrapePlatform(platform, baseUrl) {
       const { url, title } = newThreads[i];
       const pct = Math.round(((i + 1) / newThreads.length) * 100);
 
-      await setSessionProgress(platform, { current: i + 1, pct, title, savedCount, duplicateCount, failedCount, skippedCount });
+      await setSessionProgress(platform, { current: i + 1, pct, title, savedCount, duplicateCount, failedCount, skippedCount, emptyCount });
       chrome.action.setBadgeText({ text: `${pct}%` });
 
       console.log(`[${platform}] Moving to next conversation (${i+1}/${newThreads.length}): "${title}"`);
 
       try {
+        console.log(`[${platform}] Navigating to: ${url}`);
         await navigateTab(tabId, url, 1500);
+        // Re-enable scrape mode on the NEW content script instance (navigating re-injects it)
+        try { await tabMessage(tabId, { type: 'SET_SCRAPE_MODE', enabled: true }); } catch {}
+        console.log(`[${platform}] Waiting for content script...`);
         await waitForContentScript(tabId);
+        console.log(`[${platform}] Content script ready`);
 
         let captureResult = null;
         for (let attempt = 0; attempt < 3; attempt++) {
           console.log(`[${platform}] Capture attempt ${attempt+1}/3 for: "${title}"`);
           captureResult = await tabMessage(tabId, { type: 'CAPTURE_CURRENT' });
+          console.log(`[${platform}] CAPTURE_CURRENT returned: ${JSON.stringify(captureResult)}`);
           if (captureResult?.status === 'saved' || captureResult?.status === 'skipped' || captureResult?.status === 'empty') break;
           await new Promise(r => setTimeout(r, 2000));
         }
 
         const status = captureResult?.status || 'unknown';
         const reason = captureResult?.reason || '';
+        console.log(`[${platform}] Final status: ${status}, reason: ${reason || 'none'}`);
 
         if (status === 'saved') {
           savedCount++;
@@ -187,12 +225,15 @@ async function scrapePlatform(platform, baseUrl) {
         } else if (status === 'skipped') {
           skippedCount++;
           console.log(`[${platform}] Skipped: "${title}" — ${reason || 'no reason'}`);
+        } else if (status === 'empty') {
+          emptyCount++;
+          console.log(`[${platform}] Empty: "${title}" — no messages found on page (DOM selectors may not match)`);
         } else {
           failedCount++;
           console.warn(`[${platform}] Capture failed for "${title}": ${status}${reason ? ' ('+reason+')' : ''}`);
         }
 
-        console.log(`[${platform}] Chat count updated: ${savedCount} saved · ${duplicateCount} duplicates · ${failedCount} failed`);
+        console.log(`[${platform}] Chat count updated: ${savedCount} saved · ${duplicateCount} duplicates · ${emptyCount} empty · ${failedCount} failed`);
 
       } catch (e) {
         failedCount++;
@@ -203,16 +244,18 @@ async function scrapePlatform(platform, baseUrl) {
     }
 
     await setSessionProgress(platform, {
-      running: false, done: true, pct: 100, savedCount, syncedCount, duplicateCount, failedCount, skippedCount,
-      title: `Done — ${savedCount} saved · ${syncedCount} synced · ${duplicateCount} duplicates · ${failedCount} failed`,
+      running: false, done: true, pct: 100, savedCount, syncedCount, duplicateCount, failedCount, skippedCount, emptyCount,
+      title: `Done — ${savedCount} saved · ${syncedCount} synced · ${duplicateCount} duplicates · ${emptyCount} empty · ${failedCount} failed`,
     });
 
-    console.log(`[${platform}] Scraping finished: ${savedCount} saved · ${syncedCount} synced · ${duplicateCount} duplicates · ${failedCount} failed`);
+    console.log(`[${platform}] Scraping finished: ${savedCount} saved · ${syncedCount} synced · ${duplicateCount} duplicates · ${emptyCount} empty · ${failedCount} failed`);
 
   } catch (err) {
     console.error(`[${platform}] Scrape failed:`, err.message);
     await setSessionProgress(platform, { running: false, done: true, title: `Error: ${err.message}` });
   } finally {
+    // Turn off scrape mode so auto-capture resumes for normal browsing
+    if (tabId) { try { await tabMessage(tabId, { type: 'SET_SCRAPE_MODE', enabled: false }); } catch {} }
     if (tabId) chrome.tabs.remove(tabId).catch(() => {});
     activeSessions = Math.max(0, activeSessions - 1);
     stopKeepAlive();
