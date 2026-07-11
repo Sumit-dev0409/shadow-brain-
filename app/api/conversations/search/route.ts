@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 
-const BACKEND = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const BACKEND = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'https://shadow-brain-u4ua.onrender.com';
 
 export async function POST(request: NextRequest) {
   try {

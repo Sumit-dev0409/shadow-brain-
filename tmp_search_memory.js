@@ -1,8 +1,8 @@
-const http = require('http');
+const https = require('https');
 const data = JSON.stringify({ query: 'test' });
 const options = {
-  hostname: '127.0.0.1',
-  port: 8000,
+  hostname: 'shadow-brain-u4ua.onrender.com',
+  port: 443,
   path: '/api/conversations/search',
   method: 'POST',
   headers: {
@@ -11,7 +11,7 @@ const options = {
   },
 };
 
-const req = http.request(options, (res) => {
+const req = https.request(options, (res) => {
   console.log('statusCode', res.statusCode);
   let body = '';
   res.on('data', (chunk) => (body += chunk));
