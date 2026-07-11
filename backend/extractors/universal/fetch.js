@@ -462,6 +462,7 @@ function init() {
 
   // ── Capture pipeline ─────────────────────────────────────
   let isCapturing = false;
+  let scrapeMode = false; // when true, suppress auto-capture (scrapePlatform controls captures)
 
   async function captureAndSend(scroll = false) {
     if (isCapturing) return { status: 'busy' };
@@ -471,13 +472,17 @@ function init() {
       await waitForStreamingToFinish();
       if (scroll) {
         await scrollToLoadAllMessages();
-      } else {
+      } else if (!scrapeMode) {
         // Auto-capture: do a gentle single pass so Gemini loads at least what's visible
+        // But skip this during scrape mode — scrapePlatform will send CAPTURE_CURRENT with scroll=true
         const c = getConversationContainer();
         c.scrollTop = 0;
         await new Promise(r => setTimeout(r, 300));
         c.scrollTop = c.scrollHeight;
         await new Promise(r => setTimeout(r, 1000));
+      } else {
+        // Scrape mode: just wait briefly for the page to settle
+        await new Promise(r => setTimeout(r, 800));
       }
       const conversation = scrapeCustom() || scrapeConversation();
       if (!conversation) {
@@ -496,21 +501,37 @@ function init() {
 
   // ── MutationObserver ─────────────────────────────────────
   let debounceTimer = null;
-  const observer = new MutationObserver(() => { clearTimeout(debounceTimer); debounceTimer = setTimeout(() => captureAndSend(false), 3000); });
+  const observer = new MutationObserver(() => {
+    if (scrapeMode) return; // suppress during scrape mode
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => captureAndSend(false), 3000);
+  });
 
   function waitForChatAndObserve() {
     observer.observe(document.querySelector('main') || document.body, { childList: true, subtree: true });
     console.log(`[Brain Shadow] Observer attached (${config.platform})`);
-    setTimeout(captureAndSend, 3500);
+    // Auto-capture: only fire if NOT in scrape mode
+    setTimeout(() => {
+      if (!scrapeMode) {
+        captureAndSend(false);
+      } else {
+        console.log(`[${config.platform}] Auto-capture suppressed (scrape mode active)`);
+      }
+    }, 3500);
   }
 
   // ── SPA navigation watcher ───────────────────────────────
   let lastUrl = location.href;
   new MutationObserver(() => {
     if (location.href !== lastUrl) {
-      console.log(`[${config.platform}] Moving to next conversation`);
+      console.log(`[${config.platform}] URL changed: ${lastUrl} → ${location.href}`);
       lastUrl = location.href;
-      setTimeout(() => captureAndSend(true), 4000);
+      if (!scrapeMode) {
+        console.log(`[${config.platform}] SPA navigation — auto-capturing...`);
+        setTimeout(() => captureAndSend(true), 4000);
+      } else {
+        console.log(`[${config.platform}] SPA navigation suppressed (scrape mode active)`);
+      }
     }
   }).observe(document, { subtree: true, childList: true });
 
@@ -621,6 +642,12 @@ function init() {
 
   // ── Message listener ─────────────────────────────────────
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type === 'SET_SCRAPE_MODE') {
+      scrapeMode = !!request.enabled;
+      console.log(`[${config.platform}] Scrape mode: ${scrapeMode ? 'ON (auto-capture suppressed)' : 'OFF'}`);
+      sendResponse({ ok: true, scrapeMode });
+      return true;
+    }
     if (request.type === 'GET_SIDEBAR_CHATS') {
       scrollSidebarToLoadAll().then(() => sendResponse(extractRecents()));
       return true;

@@ -135,48 +135,60 @@ class EnrichmentService {
   }
 
   async process(conversationId, attempt = 1) {
+    console.log(`[ENRICHMENT] process() called for ${conversationId} (attempt ${attempt})`);
+    
     const conversation = await conversationService.getById(conversationId);
     if (!conversation) {
-      logger.error(`Enrichment failed: Conversation not found: ${conversationId}`);
+      console.error(`[ENRICHMENT] !!! Conversation not found: ${conversationId} !!!`);
       return;
     }
 
+    console.log(`[ENRICHMENT] Found conversation: platform=${conversation.platform}, status=${conversation.status}, msgs=${conversation.messages?.length}`);
+
     if (this.hasUsableEnrichment(conversation) && conversation.status === 'COMPLETED') {
-      logger.info(`[ENRICHMENT SKIP] ${conversationId} already has enrichment data.`);
+      console.log(`[ENRICHMENT] SKIP — already enriched`);
       return;
     }
 
     if (conversation.status === 'PROCESSING' && attempt === 1) {
-      logger.info(`Enrichment for ${conversationId} already in progress. Skipping.`);
+      console.log(`[ENRICHMENT] SKIP — already in progress`);
       return;
     }
 
     try {
-      logger.info(`[ENRICHMENT START] attempt ${attempt} for ${conversationId}`);
+      console.log(`[ENRICHMENT] Starting extraction for ${conversationId}`);
       await conversationService.updateStatus(conversationId, 'PROCESSING');
 
       const text        = this.extractConversationText(conversation);
       const cleanedText = cleanConversationText(text);
+      console.log(`[ENRICHMENT] Text length: ${text.length}, cleaned: ${cleanedText.length}`);
 
       if (!cleanedText || cleanedText.length < 3) {
         throw new Error('Conversation content is empty');
       }
 
       const enrichment = await extractMetadata(cleanedText, conversation);
-      await conversationService.updateEnrichment(conversationId, enrichment);
-      logger.info(`[ENRICHMENT DONE] ${conversationId} (${enrichment.enrichment_version || 'local'})`);
+      console.log(`[ENRICHMENT] Metadata extracted: topic="${enrichment.topic}", version="${enrichment.enrichment_version}"`);
+      
+      const saved = await conversationService.updateEnrichment(conversationId, enrichment);
+      if (saved) {
+        console.log(`[ENRICHMENT] SUCCESS — enrichment saved to DB for ${conversationId}`);
+      } else {
+        console.error(`[ENRICHMENT] !!! updateEnrichment returned null for ${conversationId} !!!`);
+      }
 
     } catch (error) {
-      logger.error(`[ENRICHMENT FAIL] attempt ${attempt} for ${conversationId}: ${error.message}`);
+      console.error(`[ENRICHMENT] FAILED attempt ${attempt}: ${error.message}`);
+      console.error(`[ENRICHMENT] Error stack: ${error.stack}`);
 
       if (attempt < 3) {
-        logger.info(`Retrying ${conversationId} (attempt ${attempt + 1})`);
-        this.process(conversationId, attempt + 1).catch(err =>
-          logger.error(`Retry trigger failed: ${err.message}`)
-        );
+        console.log(`[ENRICHMENT] Retrying ${conversationId} (attempt ${attempt + 1}/3)`);
+        this.process(conversationId, attempt + 1).catch(err => {
+          console.error(`[ENRICHMENT] Retry trigger failed: ${err.message}`);
+        });
       } else {
+        console.error(`[ENRICHMENT] Marking as FAILED after 3 attempts for ${conversationId}`);
         await conversationService.updateStatus(conversationId, 'FAILED', error.message);
-        logger.warn(`[ENRICHMENT] Marked as FAILED after 3 attempts`);
       }
     }
   }
