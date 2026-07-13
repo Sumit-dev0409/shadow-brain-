@@ -16,6 +16,21 @@ const BACKEND_KEY  = 'brain_shadow_backend_url';
 const PROGRESS_KEY = 'brain_shadow_scrape_progress';
 const DEFAULT_BACKEND = 'http://localhost:8000';
 
+// ── Storage write mutex ─────────────────────────────────────
+// chrome.storage.local.get()/.set() are async and NOT transactional.
+// Concurrent multi-platform scraping (by design) can call saveConversation()
+// from several tabs at once. Without serialization, two overlapping
+// "get conversations → modify in memory → set conversations" cycles will
+// stomp on each other and silently drop a saved chat — this is the #1
+// root cause of chat/message/platform counts not increasing. Every
+// read-modify-write of STORAGE_KEY/META_KEY must go through this queue.
+let _storageChain = Promise.resolve();
+function withStorageLock(fn) {
+  const run = _storageChain.then(fn, fn); // run fn even if the previous link rejected
+  _storageChain = run.then(() => {}, () => {}); // keep the chain alive on error
+  return run;
+}
+
 // ── Keep service worker alive during scraping ──────────────
 let keepAliveTimer = null;
 let activeSessions = 0;  // how many platform scrapes are running
@@ -102,6 +117,38 @@ function tabMessage(tabId, msg) {
   });
 }
 
+<<<<<<< Updated upstream
+=======
+// Wait until the content script's message listener is registered (responds to PING)
+async function waitForContentScriptReady(tabId, maxMs = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    const r = await tabMessage(tabId, { type: 'PING' });
+    if (r?.pong) return true;
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+}
+
+// Enable/disable scrape mode with confirmation + retries. Sending this
+// message before the content script's listener is registered means it is
+// silently dropped (chrome.tabs.sendMessage with no receiver), leaving the
+// new page's scrapeMode flag at its default `false`. That lets the
+// content script's own 3.5s auto-capture timer fire a partial (unscrolled)
+// snapshot that wins the save-race against the real, fully-scrolled
+// CAPTURE_CURRENT sent later — the exact scenario that froze message
+// counts on some platforms (most visibly DeepSeek, whose sidebar read is
+// slower). Always call this AFTER waitForContentScriptReady()/PING succeeds.
+async function setScrapeModeConfirmed(tabId, enabled, maxAttempts = 5) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const r = await tabMessage(tabId, { type: 'SET_SCRAPE_MODE', enabled });
+    if (r?.ok) return true;
+    await new Promise(res => setTimeout(res, 400));
+  }
+  return false;
+}
+
+>>>>>>> Stashed changes
 // ══════════════════════════════════════════════════════════
 // SCRAPE ONE PLATFORM — fully independent, own hidden tab
 // ══════════════════════════════════════════════════════════
@@ -128,6 +175,28 @@ async function scrapePlatform(platform, baseUrl) {
 
     await setSessionProgress(platform, { title: 'Reading sidebar…' });
 
+<<<<<<< Updated upstream
+=======
+    // Wait until content script is ready BEFORE talking to it — sending
+    // SET_SCRAPE_MODE to a tab whose listener isn't registered yet is
+    // silently dropped (see setScrapeModeConfirmed's comment above).
+    const ready = await waitForContentScriptReady(tabId);
+    if (!ready) {
+      console.warn(`[${platform}] Content script did not respond to PING after ${15}s — aborting`);
+      await setSessionProgress(platform, { running: false, done: true, title: 'Content script not ready' });
+      return;
+    }
+
+    // Now that the content script is confirmed listening, suppress
+    // auto-capture — retried until acknowledged so it never races the
+    // page's own 3.5s auto-capture timer.
+    const scrapeModeSet = await setScrapeModeConfirmed(tabId, true);
+    if (!scrapeModeSet) {
+      console.warn(`[${platform}] Could not confirm scrape mode ON — auto-capture may race the bulk capture`);
+    }
+
+    console.log(`[${platform}] Sending GET_SIDEBAR_CHATS...`);
+>>>>>>> Stashed changes
     const threads = await tabMessage(tabId, { type: 'GET_SIDEBAR_CHATS' }) || [];
 
     if (!threads.length) {
@@ -183,12 +252,31 @@ async function scrapePlatform(platform, baseUrl) {
 
       try {
         await navigateTab(tabId, url, 1500);
+<<<<<<< Updated upstream
+=======
+        console.log(`[${platform}] Waiting for content script...`);
+        // Confirm the NEW content script instance (navigating re-injects it)
+        // is actually listening before telling it to suppress auto-capture —
+        // otherwise the message is dropped and the page's own auto-capture
+        // timer can save a partial snapshot first.
+        const navReady = await waitForContentScriptReady(tabId, 15000);
+        if (navReady) {
+          await setScrapeModeConfirmed(tabId, true, 3);
+        } else {
+          console.warn(`[${platform}] Content script not ready after navigation — proceeding anyway`);
+        }
+>>>>>>> Stashed changes
         await waitForContentScript(tabId);
 
         let captureResult = null;
         for (let attempt = 0; attempt < 3; attempt++) {
           captureResult = await tabMessage(tabId, { type: 'CAPTURE_CURRENT' });
+<<<<<<< Updated upstream
           if (captureResult?.status === 'saved' || captureResult?.status === 'skipped') break;
+=======
+          console.log(`[${platform}] CAPTURE_CURRENT returned: ${JSON.stringify(captureResult)}`);
+          if (captureResult?.status === 'saved' || captureResult?.status === 'updated' || captureResult?.status === 'skipped' || captureResult?.status === 'empty') break;
+>>>>>>> Stashed changes
           await new Promise(r => setTimeout(r, 2000));
         }
 
@@ -248,7 +336,14 @@ async function scrapePlatform(platform, baseUrl) {
 }
 
 // ── Save conversation ──────────────────────────────────────
+// Single source of truth for chat/message/platform stats: every write to
+// STORAGE_KEY goes through withStorageLock (no lost updates from
+// concurrent multi-platform scraping) and is immediately followed by
+// updateMeta() recomputed from the FULL conversation set (no drift between
+// META_KEY and what's actually stored). Network sync happens outside the
+// lock so a slow backend never blocks other tabs' saves.
 async function saveConversation(data, source = 'realtime') {
+<<<<<<< Updated upstream
   try {
     const result        = await chrome.storage.local.get(STORAGE_KEY);
     const conversations = result[STORAGE_KEY] || {};
@@ -261,19 +356,86 @@ async function saveConversation(data, source = 'realtime') {
     conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source, synced: false };
     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
     await updateMeta(conversations);
+=======
+  const platform     = data.platform || 'unknown';
+  const external_id  = data.external_id || '';
+  const messageCount = data.messages?.length || 0;
+  const key          = `${platform}_${external_id}`;
 
-    // Sync to backend immediately (fire and forget — local save already succeeded)
-    const syncResult = await syncToBackend(data);
-    if (syncResult.ok) {
-      conversations[key].synced = true;
+  console.log(`[${platform}] saveConversation: ID=${external_id} messages=${messageCount} source=${source} key=${key}`);
+
+  // ── Locked section: read → merge/insert → write conversations + meta ──
+  const local = await withStorageLock(async () => {
+    try {
+      const result         = await chrome.storage.local.get(STORAGE_KEY);
+      const conversations  = result[STORAGE_KEY] || {};
+      const existing       = conversations[key];
+
+      // True duplicate: this key exists AND the incoming capture has no
+      // new information (same or fewer messages). Per spec, this must
+      // never touch any counter — bail out before writing anything.
+      if (existing && messageCount <= (existing.message_count || 0)) {
+        console.log(`[${platform}] Duplicate — "${data.title}" (ID: ${external_id}) already has ${existing.message_count || 0} messages (incoming: ${messageCount})`);
+        return { status: 'skipped', reason: 'duplicate', key, message_count: existing.message_count || 0 };
+      }
+
+      // Either a brand-new chat, OR an existing chat whose new capture has
+      // MORE messages than what's stored (e.g. the real, fully-scrolled
+      // CAPTURE_CURRENT arriving after an earlier partial auto-capture).
+      // In both cases we write — this is what lets message counts
+      // self-heal instead of freezing at whatever arrived first.
+      const status = existing ? 'updated' : 'saved';
+      conversations[key] = {
+        ...data,
+        saved_at: new Date().toISOString(),
+        message_count: messageCount,
+        source,
+        // Keep the existing synced flag only if we didn't actually change
+        // anything meaningful; otherwise it needs to (re)sync below.
+        synced: existing && status === 'updated' ? false : (existing?.synced || false),
+      };
+>>>>>>> Stashed changes
+
       await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
-    }
+      console.log(`[${platform}] About to updateMeta — totalKeys=${Object.keys(conversations).length}`);
+      await updateMeta(conversations);
+      console.log(`[${platform}] Conversation ${status}: "${data.title}" (ID: ${external_id}, messages: ${messageCount})`);
+      console.log(`[${platform}] Chat count updated: ${Object.keys(conversations).length} total`);
+      console.log(`[${platform}] Message count updated: ${messageCount} messages in this conversation`);
+      console.log(`[${platform}] Platform count updated`);
 
+<<<<<<< Updated upstream
     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴' : '📦'} saved: ${data.title} | synced: ${syncResult.ok}`);
     return { status: 'saved', key, synced: syncResult.ok };
   } catch (err) {
     return { status: 'error', error: err.message };
+=======
+      return { status, key, message_count: messageCount };
+    } catch (err) {
+      console.error(`[${platform}] Save error: ${err.message}`);
+      return { status: 'error', error: err.message };
+    }
+  });
+
+  if (local.status === 'skipped' || local.status === 'error') return local;
+
+  // ── Sync to backend (outside the lock — network I/O must not block
+  //    other tabs' saves during concurrent scraping) ──
+  const syncResult = await syncToBackend(data);
+  if (syncResult.ok) {
+    await withStorageLock(async () => {
+      const result        = await chrome.storage.local.get(STORAGE_KEY);
+      const conversations = result[STORAGE_KEY] || {};
+      if (conversations[key]) {
+        conversations[key].synced = true;
+        await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+      }
+    });
+>>>>>>> Stashed changes
   }
+
+  console.log(`[${platform}] Save result: ${local.status} | synced: ${syncResult.ok}`);
+  return { status: local.status, key, synced: syncResult.ok, message_count: messageCount };
 }
 
 async function syncToBackend(data) {
@@ -322,8 +484,10 @@ async function exportAllData() {
 }
 
 async function clearAllData() {
-  await chrome.storage.local.remove([STORAGE_KEY, META_KEY, PROGRESS_KEY]);
-  return { status: 'cleared' };
+  return withStorageLock(async () => {
+    await chrome.storage.local.remove([STORAGE_KEY, META_KEY, PROGRESS_KEY]);
+    return { status: 'cleared' };
+  });
 }
 
 // ── Message handler ────────────────────────────────────────
