@@ -298,21 +298,50 @@ function queryAllSelectors(selectors) {
   return out.filter(el => !out.some(other => other !== el && other.contains(el)));
 }
 
+// Per-selector match counts, so we can see exactly which configured
+// selector (if any) is finding messages on a given platform right now,
+// without needing to inspect the live DOM by hand.
+function debugSelectorBreakdown(label, selectors) {
+  const breakdown = (selectors || []).map(sel => {
+    let count = 0;
+    try { count = document.querySelectorAll(sel).length; } catch { count = -1; /* invalid selector */ }
+    return `${sel} → ${count}`;
+  });
+  console.log(`[Brain Shadow][debug] ${config.platform} ${label} selectors:\n  ` + breakdown.join('\n  '));
+}
+
 function scrapeConversation() {
+    debugSelectorBreakdown('userSel', config.userSel);
+    debugSelectorBreakdown('asstSel', config.asstSel);
+
     let userEls = queryAllSelectors(config.userSel);
     let asstEls = queryAllSelectors(config.asstSel);
 
-    // Container fallback
+    console.log(`[Brain Shadow][debug] ${config.platform} matched: ${userEls.length} user, ${asstEls.length} assistant (after union + ancestor-filter)`);
+
+    // Container fallback — last resort when none of the configured selectors
+    // matched anything. This heuristic just alternates a container's direct
+    // children as user/assistant, which breaks if there's any non-message
+    // child mixed in (date separators, buttons, etc.) — logged loudly since
+    // it's the most likely source of scrambled/wrong role assignment.
     if (!userEls.length && !asstEls.length) {
+      console.warn(`[Brain Shadow][debug] ${config.platform}: no configured selector matched ANYTHING — falling back to fragile container heuristic. This platform's selectors likely need updating.`);
       for (const sel of ['[class*="chatContent"]','[class*="messageList"]','[class*="conversation"]','main']) {
         const c = document.querySelector(sel);
         if (!c) continue;
         const children = [...c.children].filter(el => el.innerText?.trim().length > 3);
-        if (children.length >= 2) { children.forEach((el, i) => (i % 2 === 0 ? userEls : asstEls).push(el)); break; }
+        if (children.length >= 2) {
+          console.warn(`[Brain Shadow][debug] ${config.platform}: container fallback matched "${sel}" with ${children.length} children — alternating even/odd as user/assistant (fragile).`);
+          children.forEach((el, i) => (i % 2 === 0 ? userEls : asstEls).push(el));
+          break;
+        }
       }
     }
 
-    if (!userEls.length && !asstEls.length) return null;
+    if (!userEls.length && !asstEls.length) {
+      console.warn(`[Brain Shadow][debug] ${config.platform}: scrapeConversation() found NOTHING — returning null (this will show as "empty" in the popup).`);
+      return null;
+    }
 
     const allItems = [
       ...userEls.map(el => ({ el, role: 'user' })),
@@ -325,12 +354,19 @@ function scrapeConversation() {
 
     messages = deduplicateConsecutiveRoles(messages);
     const last = messages[messages.length - 1];
-    if (!last || last.role !== 'assistant') return null;
+    if (!last || last.role !== 'assistant') {
+      console.warn(`[Brain Shadow][debug] ${config.platform}: last message role is "${last?.role || 'none'}", not "assistant" — discarding capture. If role assignment looks backwards below, the fragile container fallback likely mixed up user/assistant order.`);
+      console.log(`[Brain Shadow][debug] ${config.platform} message roles in order: ` + messages.map(m => m.role).join(', '));
+      return null;
+    }
     messages = assignRelativeTimestamps(messages);
 
     const external_id = config.extractId ? config.extractId(location.href) : location.href;
     const rawTitle    = document.title || '';
     const title       = (config.titleClean ? config.titleClean(rawTitle) : rawTitle).trim() || external_id;
+
+    console.log(`[Brain Shadow][debug] ${config.platform} captured ${messages.length} messages. Preview:\n` +
+      messages.map(m => `  [${m.role}] ${m.content.slice(0, 80).replace(/\n/g, ' ')}${m.content.length > 80 ? '…' : ''}`).join('\n'));
 
     return { platform: config.platform, external_id, url: location.href, title, message_count: messages.length, messages, captured_at: new Date().toISOString() };
   }
