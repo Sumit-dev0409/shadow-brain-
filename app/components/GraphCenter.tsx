@@ -2,8 +2,8 @@
 
 import { useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { MessageSquare, Sparkles, Loader2, X, Clock } from "lucide-react";
-import { ObsidianGraph } from "./ObsidianGraph";
+import { MessageSquare, Sparkles, Loader2, X, Clock, Orbit, Crosshair, Lock, LockOpen } from "lucide-react";
+import { ObsidianGraph, type ObsidianGraphHandle, type ZoomLevel } from "./ObsidianGraph";
 import { ChatSession, Message } from "@/app/types";
 import { searchMemory, MemorySource } from "@/app/lib/api";
 import { AI_AGENTS, PLATFORM_COLORS, PLATFORM_LABELS, PLATFORM_ABBR } from "@/app/lib/agents";
@@ -493,6 +493,12 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
   const [selectedConversation, setSelectedConversation] = useState<ChatSession | null>(null);
   const [isConversationPopupOpen, setConversationPopupOpen] = useState(false);
 
+  // Globe view controls — zoom category readout, rotate/zoom lock, recenter.
+  const graphRef = useRef<ObsidianGraphHandle>(null);
+  const [locked, setLocked] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState<ZoomLevel>("mid");
+  const handleFocus = useCallback(() => graphRef.current?.focus(), []);
+
   // Force-open panel when a history item is clicked (even if same keyword)
   useEffect(() => {
     if (panelResetKey) setPanelDismissed(false);
@@ -764,7 +770,7 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
 
       {/* Top bar */}
       <div
-        className="flex items-center justify-between px-5 py-3.5 flex-shrink-0"
+        className="flex items-center justify-between gap-3 px-5 py-3.5 flex-shrink-0"
         style={{
           borderBottom: "1px solid var(--border-subtle)",
           background: "rgba(11,18,32,0.72)",
@@ -772,7 +778,7 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
         }}
       >
         <div
-          className="flex items-center gap-2 px-3 py-1.5 rounded-full text-[11.5px] font-semibold"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-full text-[11.5px] font-semibold flex-shrink-0"
           style={{
             background: "rgba(139, 92, 246, 0.1)",
             border: "1px solid var(--border-glow)",
@@ -795,8 +801,53 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
           </span>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="hidden lg:flex items-center gap-1.5">
+        {/* Zoom readout + context breadcrumb */}
+        <div className="hidden min-[1650px]:flex items-center gap-2 flex-1 min-w-0 justify-center overflow-hidden">
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider flex-shrink-0"
+            style={{ background: "var(--bg-surface)", border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }}
+          >
+            <Orbit size={11} />
+            Zoom {zoomLevel}
+          </div>
+          <div
+            className="flex items-center px-3 py-1 rounded-lg text-[11px] min-w-[110px] overflow-hidden"
+            style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }}
+          >
+            <span className="truncate">
+              {kw.length > 1 ? `Exploring "${searchKeyword.trim()}"` : "All memories"}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <motion.button
+            onClick={handleFocus}
+            title="Recenter the globe"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-medium"
+            style={{ border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }}
+            whileHover={{ border: "1px solid var(--border-glow)", color: "var(--text-primary)", background: "var(--bg-hover)" }}
+            whileTap={{ scale: 0.95 }}
+          >
+            <Crosshair size={12} />
+            <span className="hidden sm:inline">Focus</span>
+          </motion.button>
+          <motion.button
+            onClick={() => setLocked((l) => !l)}
+            title={locked ? "Unlock rotation & zoom" : "Lock rotation & zoom"}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-medium"
+            style={
+              locked
+                ? { border: "1px solid rgba(236,72,153,0.4)", color: "var(--pink)", background: "var(--pink-dim)" }
+                : { border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }
+            }
+            whileHover={locked ? undefined : { border: "1px solid var(--border-glow)", color: "var(--text-primary)", background: "var(--bg-hover)" }}
+            whileTap={{ scale: 0.95 }}
+          >
+            {locked ? <Lock size={12} /> : <LockOpen size={12} />}
+            <span className="hidden sm:inline">Lock</span>
+          </motion.button>
+          <div className="hidden 2xl:flex items-center gap-1.5">
             {AI_AGENTS.map((agent) => (
               <span
                 key={agent.id}
@@ -840,9 +891,12 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
 
         {/* Canvas always fills full space */}
         <ObsidianGraph
+          ref={graphRef}
           searchKeyword={searchKeyword}
           highlightedNodes={highlightedNodes}
-onNodeClick={handleNodeClick}
+          onNodeClick={handleNodeClick}
+          locked={locked}
+          onZoomLevelChange={setZoomLevel}
         />
 
         {/* Idle hint — hidden when panel is open */}

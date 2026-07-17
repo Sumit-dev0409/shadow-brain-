@@ -1,26 +1,37 @@
 "use client";
 
-import { useRef, useMemo, useCallback, useEffect, Suspense } from "react";
+import { useRef, useMemo, useCallback, useEffect, useImperativeHandle, forwardRef, Suspense } from "react";
 import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
-import { OrbitControls, Html } from "@react-three/drei";
+import { OrbitControls, Html, Line } from "@react-three/drei";
 import * as THREE from "three";
 import { motion } from "framer-motion";
 import { Plus, Minus, Maximize } from "lucide-react";
-import { createBrainGeometry, sampleBrainSurfacePoint, seededRandom } from "../lib/brainGeometry";
+import { seededRandom } from "../lib/brainGeometry";
+import { buildGlobeWireframe, buildEquatorRing, fibonacciSpherePoints } from "../lib/wireframeGlobe";
 
 const NODE_COUNT = 1000;
 const CENTER_NODES = 8;
-const BRAIN_RADIUS = 1.6;
-const MIN_DIST = 2.3;
-const MAX_DIST = 7.5;
-const DEFAULT_DIST = 4.2;
+const CLUSTER_COUNT = 9;
+const GLOBE_RADIUS = 1.6;
+const HUB_SHELL = GLOBE_RADIUS * 0.96;
+const MIN_DIST = 2.6;
+const MAX_DIST = 8.5;
+const DEFAULT_DIST = 4.6;
+const ZOOM_NEAR = 3.4;
+const ZOOM_FAR = 6.6;
+
+export type ZoomLevel = "near" | "mid" | "far";
 
 const COLORS = [
   "#f97316", // Claude AI — orange
   "#8b5cf6", // Copilot — purple
-  "#94a3b8", // ChatGPT — light grey (visible against the dark brain material)
+  "#94a3b8", // ChatGPT — light grey (visible against the dark void)
   "#3b82f6", // Gemini — blue
 ];
+
+export interface ObsidianGraphHandle {
+  focus: () => void;
+}
 
 interface ObsidianGraphProps {
   searchKeyword: string;
@@ -29,6 +40,9 @@ interface ObsidianGraphProps {
   /** Map from node ID → short date label e.g. "Jun 18" */
   nodeDates?: Map<number, string>;
   onNodeClick?: (nodeId: number, keyword: string) => void;
+  /** Freezes rotation, drag-orbit and zoom when true */
+  locked?: boolean;
+  onZoomLevelChange?: (level: ZoomLevel) => void;
 }
 
 interface NodeLayout {
@@ -44,60 +58,125 @@ function buildNodeLayout(): NodeLayout[] {
   const rand = seededRandom(1337);
   const nodes: NodeLayout[] = [];
 
-  for (let i = 0; i < NODE_COUNT; i++) {
-    const isCentral = i < CENTER_NODES;
-    const category = Math.floor(rand() * 4);
-    const position = isCentral
-      ? new THREE.Vector3(
-          (rand() - 0.5) * BRAIN_RADIUS * 0.28,
-          (rand() - 0.5) * BRAIN_RADIUS * 0.28,
-          (rand() - 0.5) * BRAIN_RADIUS * 0.28
-        )
-      : sampleBrainSurfacePoint(BRAIN_RADIUS, rand);
-
+  // Core cluster — small nodes right at the center of the globe.
+  for (let i = 0; i < CENTER_NODES; i++) {
     nodes.push({
       id: i,
-      position,
-      color: COLORS[category],
-      radius: isCentral ? 0.026 + rand() * 0.014 : 0.011 + rand() * 0.013,
-      isCentral,
+      position: new THREE.Vector3(
+        (rand() - 0.5) * GLOBE_RADIUS * 0.22,
+        (rand() - 0.5) * GLOBE_RADIUS * 0.22,
+        (rand() - 0.5) * GLOBE_RADIUS * 0.22
+      ),
+      color: "#bcd0ff",
+      radius: 0.026 + rand() * 0.014,
+      isCentral: true,
       connections: [],
     });
   }
 
-  for (let i = 0; i < nodes.length; i++) {
-    const count = 1 + Math.floor(rand() * 3);
-    for (let j = 0; j < count; j++) {
-      const target = Math.floor(rand() * nodes.length);
-      if (target !== i && !nodes[i].connections.includes(target)) {
-        nodes[i].connections.push(target);
+  // Starburst cluster hubs, evenly spread across the globe surface.
+  const hubPositions = fibonacciSpherePoints(CLUSTER_COUNT, HUB_SHELL);
+  const hubIds: number[] = [];
+  hubPositions.forEach((pos, i) => {
+    const id = nodes.length;
+    hubIds.push(id);
+    nodes.push({
+      id,
+      position: pos,
+      color: COLORS[i % COLORS.length],
+      radius: 0.05 + rand() * 0.012,
+      isCentral: false,
+      connections: [],
+    });
+  });
+
+  // Distribute the remaining budget across hubs with varied burst sizes.
+  const remaining = NODE_COUNT - nodes.length;
+  const weights = hubIds.map(() => 0.45 + rand());
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+  let assigned = 0;
+  const rayCounts = weights.map((w, i) => {
+    if (i === weights.length - 1) return Math.max(5, remaining - assigned);
+    const c = Math.max(5, Math.round((w / totalWeight) * remaining));
+    assigned += c;
+    return c;
+  });
+
+  hubIds.forEach((hubId, hubIndex) => {
+    const hubNode = nodes[hubId];
+    const normal = hubNode.position.clone().normalize();
+    const tangentSeed = new THREE.Vector3().crossVectors(normal, new THREE.Vector3(0, 1, 0));
+    const tangentA = tangentSeed.lengthSq() < 0.001 ? new THREE.Vector3(1, 0, 0) : tangentSeed.normalize();
+    const tangentB = new THREE.Vector3().crossVectors(normal, tangentA).normalize();
+
+    for (let r = 0; r < rayCounts[hubIndex]; r++) {
+      // Cone-sample a direction biased toward the hub's outward normal, so
+      // rays fan outward from the globe surface like a firework burst.
+      const coneAngle = rand() * (Math.PI / 2.1);
+      const spin = rand() * Math.PI * 2;
+      const dir = normal
+        .clone()
+        .multiplyScalar(Math.cos(coneAngle))
+        .add(tangentA.clone().multiplyScalar(Math.sin(coneAngle) * Math.cos(spin)))
+        .add(tangentB.clone().multiplyScalar(Math.sin(coneAngle) * Math.sin(spin)))
+        .normalize();
+      const length = 0.12 + Math.pow(rand(), 1.6) * 0.85;
+      const position = hubNode.position.clone().add(dir.multiplyScalar(length));
+
+      nodes.push({
+        id: nodes.length,
+        position,
+        color: hubNode.color,
+        radius: 0.011 + rand() * 0.014,
+        isCentral: false,
+        connections: [hubId],
+      });
+    }
+  });
+
+  // Sparse long-range threads between hubs and the core, echoing the faint
+  // cross-globe connections in a real memory network.
+  hubIds.forEach((hubId) => {
+    if (rand() < 0.55) {
+      const other = rand() < 0.5 ? hubIds[Math.floor(rand() * hubIds.length)] : Math.floor(rand() * CENTER_NODES);
+      if (other !== hubId && !nodes[hubId].connections.includes(other)) {
+        nodes[hubId].connections.push(other);
       }
     }
-    if (i >= CENTER_NODES && rand() < 0.15) {
-      const centerTarget = Math.floor(rand() * CENTER_NODES);
-      if (!nodes[i].connections.includes(centerTarget)) nodes[i].connections.push(centerTarget);
-    }
-  }
+  });
 
   return nodes;
 }
 
-// ── The brain surface itself ──────────────────────────────────────────────
-function BrainMesh() {
-  const geometry = useMemo(() => createBrainGeometry(BRAIN_RADIUS, seededRandom(42)), []);
+// ── Wireframe globe — lat/long grid + a bright equatorial ring ─────────────
+function GlobeWireframe() {
+  const gridGeometry = useMemo(() => buildGlobeWireframe(GLOBE_RADIUS), []);
+  const equatorPoints = useMemo(() => buildEquatorRing(GLOBE_RADIUS), []);
+
   return (
-    <mesh geometry={geometry}>
-      <meshStandardMaterial
-        color="#5b4a72"
-        emissive="#1b1030"
-        emissiveIntensity={0.35}
-        roughness={0.55}
-        metalness={0.08}
-        transparent
-        opacity={0.92}
-        side={THREE.DoubleSide}
-      />
-    </mesh>
+    <group>
+      <lineSegments geometry={gridGeometry}>
+        <lineBasicMaterial color="#5b6a8f" transparent opacity={0.28} toneMapped={false} />
+      </lineSegments>
+      <Line points={equatorPoints} color="#cfe0ff" lineWidth={1.4} transparent opacity={0.75} toneMapped={false} />
+    </group>
+  );
+}
+
+// ── Glowing mark at the exact center of the globe ──────────────────────────
+function CentralHub() {
+  return (
+    <group>
+      <mesh>
+        <boxGeometry args={[0.09, 0.09, 0.09]} />
+        <meshBasicMaterial color="#f472b6" toneMapped={false} />
+      </mesh>
+      <mesh scale={2.4}>
+        <boxGeometry args={[0.09, 0.09, 0.09]} />
+        <meshBasicMaterial color="#f472b6" transparent opacity={0.16} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <pointLight color="#f472b6" intensity={1.2} distance={2.2} />
+    </group>
   );
 }
 
@@ -134,6 +213,11 @@ function NodeMarkers({
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    // The default bounding sphere only covers the base (unit) geometry at the
+    // mesh's own origin — with instances scattered far from it, that stale
+    // sphere silently rejects raycasts (clicks/hover) on most instances as a
+    // broad-phase pretest failure. Recompute it now that matrices are set.
+    mesh.computeBoundingSphere();
   }, [nodes, highlightedNodes, dummy, tmpColor]);
 
   const handleClick = useCallback(
@@ -176,6 +260,35 @@ function NodeMarkers({
       <sphereGeometry args={[1, 8, 8]} />
       <meshBasicMaterial toneMapped={false} />
     </instancedMesh>
+  );
+}
+
+// ── Always-on faint threads from every ray node back to its cluster hub ────
+function ClusterEdges({ nodes }: { nodes: NodeLayout[] }) {
+  const geometry = useMemo(() => {
+    const points: number[] = [];
+    const colors: number[] = [];
+    const color = new THREE.Color();
+    for (const node of nodes) {
+      for (const j of node.connections) {
+        const target = nodes[j];
+        if (!target) continue;
+        points.push(node.position.x, node.position.y, node.position.z);
+        points.push(target.position.x, target.position.y, target.position.z);
+        color.set(node.color);
+        colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    return geo;
+  }, [nodes]);
+
+  return (
+    <lineSegments geometry={geometry}>
+      <lineBasicMaterial vertexColors transparent opacity={0.16} toneMapped={false} />
+    </lineSegments>
   );
 }
 
@@ -261,11 +374,28 @@ function TempDebugExpose({ nodes, highlightedNodes }: { nodes: NodeLayout[]; hig
   return null;
 }
 
-function AutoRotate({ controlsRef }: { controlsRef: React.RefObject<any> }) {
+function AutoRotate({ controlsRef, paused }: { controlsRef: React.RefObject<any>; paused?: boolean }) {
   useFrame((_, delta) => {
     const controls = controlsRef.current;
-    if (!controls || controls.__dragging) return;
+    if (!controls || controls.__dragging || paused) return;
     controls.setAzimuthalAngle(controls.getAzimuthalAngle() + delta * 0.12);
+  });
+  return null;
+}
+
+// Reports the current camera-to-target distance as a coarse zoom category,
+// only firing the callback when the category actually changes.
+function ZoomReporter({ controlsRef, onChange }: { controlsRef: React.RefObject<any>; onChange?: (level: ZoomLevel) => void }) {
+  const lastLevel = useRef<ZoomLevel | null>(null);
+  useFrame(() => {
+    const controls = controlsRef.current;
+    if (!controls || !onChange) return;
+    const dist = controls.object.position.distanceTo(controls.target);
+    const level: ZoomLevel = dist > ZOOM_FAR ? "far" : dist < ZOOM_NEAR ? "near" : "mid";
+    if (level !== lastLevel.current) {
+      lastLevel.current = level;
+      onChange(level);
+    }
   });
   return null;
 }
@@ -279,6 +409,8 @@ function Scene({
   searchKeyword,
   onNodeClick,
   controlsRef,
+  locked,
+  onZoomLevelChange,
 }: {
   nodes: NodeLayout[];
   highlightedNodes: Map<number, string>;
@@ -287,6 +419,8 @@ function Scene({
   searchKeyword: string;
   onNodeClick?: (nodeId: number, keyword: string) => void;
   controlsRef: React.RefObject<any>;
+  locked?: boolean;
+  onZoomLevelChange?: (level: ZoomLevel) => void;
 }) {
   return (
     <>
@@ -295,7 +429,9 @@ function Scene({
       <directionalLight position={[-4, -2, -3]} intensity={0.5} color="#4f8aff" />
       <pointLight position={[0, 0.5, 2.5]} intensity={0.5} color="#8b5cf6" />
 
-      <BrainMesh />
+      <GlobeWireframe />
+      <CentralHub />
+      <ClusterEdges nodes={nodes} />
       <NodeMarkers
         nodes={nodes}
         highlightedNodes={highlightedNodes}
@@ -306,11 +442,14 @@ function Scene({
       <HighlightEdges nodes={nodes} highlightedNodes={highlightedNodes} />
       <DateLabels nodes={nodes} highlightedNodes={highlightedNodes} nodeDates={nodeDates} />
 
-      <AutoRotate controlsRef={controlsRef} />
+      <AutoRotate controlsRef={controlsRef} paused={locked} />
+      <ZoomReporter controlsRef={controlsRef} onChange={onZoomLevelChange} />
       <TempDebugExpose nodes={nodes} highlightedNodes={highlightedNodes} />
       <OrbitControls
         ref={controlsRef}
         enablePan={false}
+        enableRotate={!locked}
+        enableZoom={!locked}
         enableDamping
         dampingFactor={0.08}
         minDistance={MIN_DIST}
@@ -326,7 +465,10 @@ function Scene({
   );
 }
 
-export function ObsidianGraph({ searchKeyword, highlightedNodes, nodeDates, onNodeClick }: ObsidianGraphProps) {
+export const ObsidianGraph = forwardRef<ObsidianGraphHandle, ObsidianGraphProps>(function ObsidianGraph(
+  { searchKeyword, highlightedNodes, nodeDates, onNodeClick, locked, onZoomLevelChange },
+  ref
+) {
   const nodes = useMemo(() => buildNodeLayout(), []);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const controlsRef = useRef<any>(null);
@@ -357,6 +499,8 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, nodeDates, onNo
     controls.update();
   }, []);
 
+  useImperativeHandle(ref, () => ({ focus: resetView }), [resetView]);
+
   return (
     <div className="relative w-full h-full">
       <Canvas
@@ -373,6 +517,8 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, nodeDates, onNo
             searchKeyword={searchKeyword}
             onNodeClick={onNodeClick}
             controlsRef={controlsRef}
+            locked={locked}
+            onZoomLevelChange={onZoomLevelChange}
           />
         </Suspense>
       </Canvas>
@@ -427,4 +573,4 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, nodeDates, onNo
       </div>
     </div>
   );
-}
+});
