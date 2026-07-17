@@ -978,7 +978,7 @@ onNodeClick={handleNodeClick}
                       </button>
                     )}
                     <button
-                      onClick={() => setPanelDismissed(true)}
+                      onClick={() => setConversationPopupOpen(false)}
                       className="flex-shrink-0 p-1 rounded"
                       style={{ color: "var(--text-muted)" }}
                     >

@@ -8,6 +8,7 @@ import { GraphCenter } from "./components/GraphCenter";
 import { ChatArea } from "./components/ChatArea";
 import { AuthScreen } from "./components/AuthScreen";
 import { AgentSelectScreen } from "./components/AgentSelectScreen";
+import { ExtensionInstallModal } from "./components/ExtensionInstallModal";
 import { ChatSession, Message } from "./types";
 import { generateId, getMemoryGraph } from "./lib/utils";
 import {
@@ -15,6 +16,8 @@ import {
   clearSession,
   getSelectedAgents,
   getSession,
+  hasSeenExtensionPrompt,
+  markExtensionPromptSeen,
   setSelectedAgents,
 } from "./lib/auth";
 import {
@@ -78,6 +81,7 @@ export default function Home() {
   const [searchTriggerKey, setSearchTriggerKey] = useState(0);
   const [isMemorySearchLoading, setIsMemorySearchLoading] = useState(false);
   const [resultsPanelContent, setResultsPanelContent] = useState<ReactNode>(null);
+  const [showExtensionPrompt, setShowExtensionPrompt] = useState(false);
 
   // Track which session IDs have already been saved to backend
   const persistedIds = useRef<Set<string>>(new Set());
@@ -122,6 +126,10 @@ export default function Home() {
       userEmail: email,
       selectedAgents: agents,
     });
+    if (!hasSeenExtensionPrompt(email)) {
+      markExtensionPromptSeen(email);
+      setShowExtensionPrompt(true);
+    }
   }, []);
 
   const handleAgentsSelected = useCallback((agents: string[]) => {
@@ -389,16 +397,19 @@ export default function Home() {
   }
 
   return (
-    <AnimatePresence mode="wait">
-      <motion.div
-        key={stage}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.22, ease: "easeInOut" }}
-      >
-        {content}
-      </motion.div>
-    </AnimatePresence>
+    <>
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={stage}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.22, ease: "easeInOut" }}
+        >
+          {content}
+        </motion.div>
+      </AnimatePresence>
+      <ExtensionInstallModal open={showExtensionPrompt} onClose={() => setShowExtensionPrompt(false)} />
+    </>
   );
 }

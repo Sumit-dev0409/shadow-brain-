@@ -13,42 +13,15 @@ const authRoutes         = require('./routes/auth.routes');
 
 const app = express();
 
-// Allow Next.js frontend, localhost, all Chrome extensions, and any deployed
-// frontend origins listed in FRONTEND_URL (comma-separated, e.g. your Vercel URL)
-const allowedOrigins = (process.env.FRONTEND_URL || '')
-  .split(',')
-  .map((o) => o.trim())
-  .map((o) => o.replace(/\/$/, ''))
-  .filter(Boolean);
-
-// In the combined Docker deployment, the frontend calls the backend through
-// a same-origin Next.js rewrite (/backend/* -> localhost:8000/*). Next's
-// proxy forwards the original browser Origin header, but rewrites Host to
-// the proxy destination (localhost:8000) — so Origin and Host never match,
-// and the public Railway domain (dynamically assigned, easy to forget to
-// sync into FRONTEND_URL) shows up as a foreign Origin to Express.
-//
-// The reliable signal instead: port 8000 is never exposed publicly by
-// Railway (only the frontend's $PORT is), so any connection that actually
-// reaches it from outside the container is impossible — every request
-// Express sees either came in over loopback (the internal Next.js proxy)
-// or was made directly to this process in local dev. Trust loopback
-// unconditionally; everything else still goes through the origin allowlist.
-function isLoopback(req) {
-  const addr = req.socket.remoteAddress || '';
-  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
-}
-
-app.use((req, res, next) => {
+// Allow the local Next.js frontend, localhost, and all Chrome extensions.
+app.use(
   cors({
     origin: (origin, callback) => {
       if (
         !origin ||
         origin.startsWith('chrome-extension://') ||
         origin.startsWith('http://localhost') ||
-        origin.startsWith('http://127.0.0.1') ||
-        allowedOrigins.includes(origin.replace(/\/$/, '')) ||
-        isLoopback(req)
+        origin.startsWith('http://127.0.0.1')
       ) {
         callback(null, true);
       } else {
@@ -56,8 +29,8 @@ app.use((req, res, next) => {
       }
     },
     credentials: true,
-  })(req, res, next);
-});
+  })
+);
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 app.use(morgan('dev'));

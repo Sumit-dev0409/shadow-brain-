@@ -4,11 +4,7 @@ const connectDB  = require('./config/db');
 const logger     = require('./utils/logger');
 const enrichment = require('./services/enrichment.service');
 
-// BACKEND_PORT takes priority — in the combined Docker deployment, the
-// frontend (Next.js) is the process bound to Railway's shared $PORT, so the
-// backend needs its own fixed internal port to avoid an EADDRINUSE collision.
-// Standalone/local deployments (no BACKEND_PORT set) fall back to PORT as before.
-const PORT = process.env.BACKEND_PORT || process.env.PORT || 8000;
+const PORT = process.env.PORT || 8000;
 
 // Last line of defense: an uncaught rejection anywhere (e.g. a transient
 // MongoDB pool error surfacing from the driver's internal event handlers,

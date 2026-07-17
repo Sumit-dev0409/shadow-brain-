@@ -57,7 +57,7 @@ function InputRow({
   rightEl,
   invalid,
 }: {
-  icon: React.ElementType;
+  icon: React.ComponentType<{ size?: number; style?: React.CSSProperties; className?: string }>;
   label: string;
   type: string;
   value: string;
