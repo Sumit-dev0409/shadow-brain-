@@ -16,6 +16,8 @@ const conversationSchema = new mongoose.Schema(
         'perplexity', 'grok',
         'brain-shadow',
       ],
+      lowercase: true,
+      trim: true,
     },
     title: {
       type: String,

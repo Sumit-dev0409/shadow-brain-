@@ -13,12 +13,7 @@ const authRoutes         = require('./routes/auth.routes');
 
 const app = express();
 
-// Allow Next.js frontend, localhost, Chrome extensions, and deployed frontend origins
-const allowedOrigins = (process.env.FRONTEND_URL || '')
-  .split(',')
-  .map((o) => o.trim())
-  .filter(Boolean);
-
+// Allow the local Next.js frontend, localhost, and all Chrome extensions.
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -26,8 +21,7 @@ app.use(
         !origin ||
         origin.startsWith('chrome-extension://') ||
         origin.startsWith('http://localhost') ||
-        origin.startsWith('http://127.0.0.1') ||
-        allowedOrigins.includes(origin)
+        origin.startsWith('http://127.0.0.1')
       ) {
         callback(null, true);
       } else {
@@ -37,7 +31,6 @@ app.use(
     credentials: true,
   })
 );
-
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 app.use(morgan('dev'));
@@ -45,7 +38,19 @@ app.use(morgan('dev'));
 // Log every incoming request so we can see if extension data arrives
 app.use((req, res, next) => {
   if (req.method === 'POST') {
-    console.log(`[REQUEST] ${req.method} ${req.path} from ${req.headers.origin || 'unknown'}`);
+    console.log(`\n[REQUEST] ═══════════════════════════════════════════════`);
+    console.log(`[REQUEST] ${req.method} ${req.originalUrl}`);
+    console.log(`[REQUEST] Origin: ${req.headers.origin || 'none'}`);
+    console.log(`[REQUEST] Content-Type: ${req.headers['content-type'] || 'none'}`);
+    console.log(`[REQUEST] X-API-KEY: ${req.headers['x-api-key'] ? 'PRESENT (' + req.headers['x-api-key'].substring(0, 10) + '...)' : 'MISSING'}`);
+    console.log(`[REQUEST] User-Agent: ${(req.headers['user-agent'] || '').substring(0, 80)}`);
+    console.log(`[REQUEST] Body size: ${JSON.stringify(req.body || {}).length} bytes`);
+    console.log(`[REQUEST] Body keys: ${req.body ? Object.keys(req.body).join(', ') : 'EMPTY'}`);
+    if (req.body?.platform) console.log(`[REQUEST] Platform: ${req.body.platform}`);
+    if (req.body?.title) console.log(`[REQUEST] Title: ${(req.body.title || '').substring(0, 60)}`);
+    if (req.body?.messages) console.log(`[REQUEST] Message count: ${(req.body.messages || []).length}`);
+    if (req.body?.conversations) console.log(`[REQUEST] Bulk count: ${(req.body.conversations || []).length}`);
+    console.log(`[REQUEST] ═══════════════════════════════════════════════`);
   }
   next();
 });
