@@ -13,8 +13,14 @@ const cerebrasClient = process.env.CEREBRAS_API_KEY
     })
   : null;
 
-// qwen-3-32b: high-quality, ~14,400 req/day free on Cerebras
-const CEREBRAS_MODEL = 'qwen-3-32b';
+// qwen-3-32b was deprecated/removed from Cerebras (every request 404'd —
+// confirmed via /v1/models, it's no longer in their catalog). Their other
+// two current models (gpt-oss-120b, zai-glm-4.7) are reasoning models that
+// spend the token budget on hidden "thinking" before any visible content,
+// which would starve this call's max_tokens: 450 and come back empty.
+// gemma-4-31b answers directly with no reasoning overhead — verified
+// against the actual JSON-extraction prompt this function sends.
+const CEREBRAS_MODEL = 'gemma-4-31b';
 
 function isRateLimit(msg = '') {
   return msg.includes('429') || msg.toLowerCase().includes('rate limit');
@@ -71,6 +77,7 @@ function localEnrich(conversation) {
     enriched_at:        new Date(),
     enrichment_version: 'local-1.0',
     status:             'COMPLETED',
+    message_count:      messages.length,
   };
 }
 
@@ -96,7 +103,7 @@ async function extractMetadata(cleanedText, conversation) {
       const rawMetadata = parseJsonResponse(content);
       validateMetadata(rawMetadata);
       logger.info(`[ENRICHMENT] ${provider} succeeded`);
-      return { ...buildEnrichment(rawMetadata), enrichment_version: `1.0.0-${provider}` };
+      return { ...buildEnrichment(rawMetadata), enrichment_version: `1.0.0-${provider}`, message_count: conversation.messages.length };
     } catch (err) {
       if (isRateLimit(err.message)) {
         logger.warn(`[RATE LIMIT] ${provider} quota hit — switching to other provider`);
@@ -135,60 +142,59 @@ class EnrichmentService {
   }
 
   async process(conversationId, attempt = 1) {
-    console.log(`[ENRICHMENT] process() called for ${conversationId} (attempt ${attempt})`);
-    
     const conversation = await conversationService.getById(conversationId);
     if (!conversation) {
-      console.error(`[ENRICHMENT] !!! Conversation not found: ${conversationId} !!!`);
+      logger.error(`Enrichment failed: Conversation not found: ${conversationId}`);
       return;
     }
 
-    console.log(`[ENRICHMENT] Found conversation: platform=${conversation.platform}, status=${conversation.status}, msgs=${conversation.messages?.length}`);
-
-    if (this.hasUsableEnrichment(conversation) && conversation.status === 'COMPLETED') {
-      console.log(`[ENRICHMENT] SKIP — already enriched`);
+    // Only skip if enrichment exists AND the conversation hasn't grown since —
+    // this used to skip unconditionally once a conversation was ever
+    // enriched, so re-captures that added new messages (e.g. a continued
+    // chat) would keep their summary/topic frozen at the original content
+    // forever, even though messages itself was correctly getting updated.
+    const currentCount = (conversation.messages || []).length;
+    const enrichedAtCount = conversation.enrichment?.messageCountAtEnrichment;
+    if (
+      this.hasUsableEnrichment(conversation) &&
+      conversation.status === 'COMPLETED' &&
+      enrichedAtCount === currentCount
+    ) {
+      logger.info(`[ENRICHMENT SKIP] ${conversationId} already has enrichment data for current message count (${currentCount}).`);
       return;
     }
 
     if (conversation.status === 'PROCESSING' && attempt === 1) {
-      console.log(`[ENRICHMENT] SKIP — already in progress`);
+      logger.info(`Enrichment for ${conversationId} already in progress. Skipping.`);
       return;
     }
 
     try {
-      console.log(`[ENRICHMENT] Starting extraction for ${conversationId}`);
+      logger.info(`[ENRICHMENT START] attempt ${attempt} for ${conversationId}`);
       await conversationService.updateStatus(conversationId, 'PROCESSING');
 
       const text        = this.extractConversationText(conversation);
       const cleanedText = cleanConversationText(text);
-      console.log(`[ENRICHMENT] Text length: ${text.length}, cleaned: ${cleanedText.length}`);
 
       if (!cleanedText || cleanedText.length < 3) {
         throw new Error('Conversation content is empty');
       }
 
       const enrichment = await extractMetadata(cleanedText, conversation);
-      console.log(`[ENRICHMENT] Metadata extracted: topic="${enrichment.topic}", version="${enrichment.enrichment_version}"`);
-      
-      const saved = await conversationService.updateEnrichment(conversationId, enrichment);
-      if (saved) {
-        console.log(`[ENRICHMENT] SUCCESS — enrichment saved to DB for ${conversationId}`);
-      } else {
-        console.error(`[ENRICHMENT] !!! updateEnrichment returned null for ${conversationId} !!!`);
-      }
+      await conversationService.updateEnrichment(conversationId, enrichment);
+      logger.info(`[ENRICHMENT DONE] ${conversationId} (${enrichment.enrichment_version || 'local'})`);
 
     } catch (error) {
-      console.error(`[ENRICHMENT] FAILED attempt ${attempt}: ${error.message}`);
-      console.error(`[ENRICHMENT] Error stack: ${error.stack}`);
+      logger.error(`[ENRICHMENT FAIL] attempt ${attempt} for ${conversationId}: ${error.message}`);
 
       if (attempt < 3) {
-        console.log(`[ENRICHMENT] Retrying ${conversationId} (attempt ${attempt + 1}/3)`);
-        this.process(conversationId, attempt + 1).catch(err => {
-          console.error(`[ENRICHMENT] Retry trigger failed: ${err.message}`);
-        });
+        logger.info(`Retrying ${conversationId} (attempt ${attempt + 1})`);
+        this.process(conversationId, attempt + 1).catch(err =>
+          logger.error(`Retry trigger failed: ${err.message}`)
+        );
       } else {
-        console.error(`[ENRICHMENT] Marking as FAILED after 3 attempts for ${conversationId}`);
         await conversationService.updateStatus(conversationId, 'FAILED', error.message);
+        logger.warn(`[ENRICHMENT] Marked as FAILED after 3 attempts`);
       }
     }
   }

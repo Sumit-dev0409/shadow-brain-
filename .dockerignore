@@ -1,0 +1,14 @@
+node_modules
+backend/backend/node_modules
+.next
+.git
+.env
+.env.local
+backend/backend/.env
+*.log
+*.tsbuildinfo
+.qodo
+.agents
+.claude
+backend/extractors
+backend/New folder

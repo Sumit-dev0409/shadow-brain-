@@ -4,11 +4,40 @@ const logger = require('../utils/logger');
 
 class GroqService {
   constructor() {
-    this.client = new OpenAI({
-      apiKey:  config.apiKey,
-      baseURL: config.baseUrl,
-      timeout: 30000,
-    });
+    // Lazy: don't touch the OpenAI SDK at construction time. It throws
+    // immediately if apiKey is missing, and this service is instantiated
+    // once as a module-level singleton — an unset key (e.g. when running
+    // on the Cerebras fallback only) would otherwise crash the whole
+    // process at require-time, before any request ever needs Groq.
+    //
+    // Separate clients for chat vs. summary/enrichment so each workload
+    // gets its own key and quota (see config/groq.js).
+    this._chatClient    = null;
+    this._summaryClient = null;
+  }
+
+  get chatClient() {
+    if (!this._chatClient) {
+      if (!config.apiKeyChat) throw new Error('No Groq chat API key configured');
+      this._chatClient = new OpenAI({
+        apiKey:  config.apiKeyChat,
+        baseURL: config.baseUrl,
+        timeout: 30000,
+      });
+    }
+    return this._chatClient;
+  }
+
+  get summaryClient() {
+    if (!this._summaryClient) {
+      if (!config.apiKeySummary) throw new Error('No Groq summary API key configured');
+      this._summaryClient = new OpenAI({
+        apiKey:  config.apiKeySummary,
+        baseURL: config.baseUrl,
+        timeout: 30000,
+      });
+    }
+    return this._summaryClient;
   }
 
   async chat(messages, systemPrompt = null) {
@@ -25,7 +54,7 @@ class GroqService {
 
     allMessages.push(...messages.map(m => ({ role: m.role, content: m.content })));
 
-    const response = await this.client.chat.completions.create({
+    const response = await this.chatClient.chat.completions.create({
       model:       config.model,
       messages:    allMessages,
       max_tokens:  2048,
@@ -51,7 +80,7 @@ ${conversationText}`;
 
     try {
       logger.info(`DEBUG: [GROQ API CALL] Model: ${config.model}`);
-      const response = await this.client.chat.completions.create({
+      const response = await this.summaryClient.chat.completions.create({
         model:       config.model,
         messages:    [{ role: 'user', content: prompt }],
         max_tokens:  450,

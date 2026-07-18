@@ -1,57 +1,37 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useRef, useMemo, useCallback, useEffect, useImperativeHandle, forwardRef, Suspense } from "react";
+import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
+import { OrbitControls, Html, Line } from "@react-three/drei";
+import * as THREE from "three";
 import { motion } from "framer-motion";
 import { Plus, Minus, Maximize } from "lucide-react";
+import { seededRandom } from "../lib/brainGeometry";
+import { buildGlobeWireframe, buildEquatorRing, fibonacciSpherePoints } from "../lib/wireframeGlobe";
 
-interface Node {
-  id: number;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  radius: number;
-  color: string;
-  alpha: number;
-  category: number;
-  connections: number[];
-  rotAngle: number;
-  orbitRadius: number;
-  orbitSpeed: number;
-  orbitPhase: number;
-  highlighted: boolean;
-  highlightColor: string; // actual platform color, overrides random category color
-  pulsePhase: number;
-  elevSeed: number; // vertical spread within the rotating disc, gives it real depth
-  z: number;        // depth after projection — used for perspective + draw-order sorting
-  scale: number;    // perspective scale factor (near = >1, far = <1)
-}
+const NODE_COUNT = 1000;
+const CENTER_NODES = 8;
+const CLUSTER_COUNT = 9;
+const GLOBE_RADIUS = 1.6;
+const HUB_SHELL = GLOBE_RADIUS * 0.96;
+const MIN_DIST = 2.6;
+const MAX_DIST = 8.5;
+const DEFAULT_DIST = 4.6;
+const ZOOM_NEAR = 3.4;
+const ZOOM_FAR = 6.6;
 
-/** Convert a hex color to rgba(...) string */
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
+export type ZoomLevel = "near" | "mid" | "far";
 
 const COLORS = [
   "#f97316", // Claude AI — orange
   "#8b5cf6", // Copilot — purple
-  "#374151", // ChatGPT — dark grey
+  "#94a3b8", // ChatGPT — light grey (visible against the dark void)
   "#3b82f6", // Gemini — blue
 ];
 
-
-const NODE_COUNT = 1000;
-const CENTER_NODES = 8;
-// Tilt of the whole node "disc" around the X-axis — turns the flat orbit into
-// a real 3D plane so rotation reveals genuine depth (like a tilted galaxy).
-const TILT = 1.05;
-
-const MIN_ZOOM = 0.5;
-const MAX_ZOOM = 2.5;
-const DRAG_THRESHOLD = 3; // px of movement before a press counts as a drag, not a click
+export interface ObsidianGraphHandle {
+  focus: () => void;
+}
 
 interface ObsidianGraphProps {
   searchKeyword: string;
@@ -60,493 +40,488 @@ interface ObsidianGraphProps {
   /** Map from node ID → short date label e.g. "Jun 18" */
   nodeDates?: Map<number, string>;
   onNodeClick?: (nodeId: number, keyword: string) => void;
+  /** Freezes rotation, drag-orbit and zoom when true */
+  locked?: boolean;
+  onZoomLevelChange?: (level: ZoomLevel) => void;
 }
 
-export function ObsidianGraph({ searchKeyword, highlightedNodes, nodeDates, onNodeClick }: ObsidianGraphProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const nodesRef = useRef<Node[]>([]);
-  const frameRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
-  const searchRef = useRef<string>("");
-  const highlightedNodesRef = useRef<Map<number, string>>(new Map());
-  const nodeDatesRef = useRef<Map<number, string>>(new Map());
-  const nodePositionsRef = useRef<Map<number, { x: number; y: number; radius: number }>>(new Map());
-  const initSizeRef = useRef<{ w: number; h: number }>({ w: 1, h: 1 });
+interface NodeLayout {
+  id: number;
+  position: THREE.Vector3;
+  color: string;
+  radius: number;
+  isCentral: boolean;
+  connections: number[];
+}
 
-  // Camera — plain refs (not state) so pan/zoom stay smooth at 60fps without re-renders
-  const zoomRef = useRef(1);
-  const panRef = useRef({ x: 0, y: 0 });
-  const isDraggingRef = useRef(false);
-  const didDragRef = useRef(false);
-  const dragStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
-  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
+function buildNodeLayout(): NodeLayout[] {
+  const rand = seededRandom(1337);
+  const nodes: NodeLayout[] = [];
 
-  const initNodes = useCallback((w: number, h: number) => {
-    initSizeRef.current = { w, h };
-    const cx = w / 2;
-    const cy = h / 2;
-    const nodes: Node[] = [];
+  // Core cluster — small nodes right at the center of the globe.
+  for (let i = 0; i < CENTER_NODES; i++) {
+    nodes.push({
+      id: i,
+      position: new THREE.Vector3(
+        (rand() - 0.5) * GLOBE_RADIUS * 0.22,
+        (rand() - 0.5) * GLOBE_RADIUS * 0.22,
+        (rand() - 0.5) * GLOBE_RADIUS * 0.22
+      ),
+      color: "#bcd0ff",
+      radius: 0.026 + rand() * 0.014,
+      isCentral: true,
+      connections: [],
+    });
+  }
 
-    for (let i = 0; i < NODE_COUNT; i++) {
-      const category = Math.floor(Math.random() * 4);
-      const orbitRadius = 30 + Math.random() * Math.min(w, h) * 0.42;
-      const orbitPhase = Math.random() * Math.PI * 2;
-      const rotAngle = Math.random() * Math.PI * 2;
-      const isCentral = i < CENTER_NODES;
+  // Starburst cluster hubs, evenly spread across the globe surface.
+  const hubPositions = fibonacciSpherePoints(CLUSTER_COUNT, HUB_SHELL);
+  const hubIds: number[] = [];
+  hubPositions.forEach((pos, i) => {
+    const id = nodes.length;
+    hubIds.push(id);
+    nodes.push({
+      id,
+      position: pos,
+      color: COLORS[i % COLORS.length],
+      radius: 0.05 + rand() * 0.012,
+      isCentral: false,
+      connections: [],
+    });
+  });
+
+  // Distribute the remaining budget across hubs with varied burst sizes.
+  const remaining = NODE_COUNT - nodes.length;
+  const weights = hubIds.map(() => 0.45 + rand());
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+  let assigned = 0;
+  const rayCounts = weights.map((w, i) => {
+    if (i === weights.length - 1) return Math.max(5, remaining - assigned);
+    const c = Math.max(5, Math.round((w / totalWeight) * remaining));
+    assigned += c;
+    return c;
+  });
+
+  hubIds.forEach((hubId, hubIndex) => {
+    const hubNode = nodes[hubId];
+    const normal = hubNode.position.clone().normalize();
+    const tangentSeed = new THREE.Vector3().crossVectors(normal, new THREE.Vector3(0, 1, 0));
+    const tangentA = tangentSeed.lengthSq() < 0.001 ? new THREE.Vector3(1, 0, 0) : tangentSeed.normalize();
+    const tangentB = new THREE.Vector3().crossVectors(normal, tangentA).normalize();
+
+    for (let r = 0; r < rayCounts[hubIndex]; r++) {
+      // Cone-sample a direction biased toward the hub's outward normal, so
+      // rays fan outward from the globe surface like a firework burst.
+      const coneAngle = rand() * (Math.PI / 2.1);
+      const spin = rand() * Math.PI * 2;
+      const dir = normal
+        .clone()
+        .multiplyScalar(Math.cos(coneAngle))
+        .add(tangentA.clone().multiplyScalar(Math.sin(coneAngle) * Math.cos(spin)))
+        .add(tangentB.clone().multiplyScalar(Math.sin(coneAngle) * Math.sin(spin)))
+        .normalize();
+      const length = 0.12 + Math.pow(rand(), 1.6) * 0.85;
+      const position = hubNode.position.clone().add(dir.multiplyScalar(length));
 
       nodes.push({
-        id: i,
-        x: cx,
-        y: cy,
-        vx: 0,
-        vy: 0,
-        radius: isCentral ? 4 + Math.random() * 3 : 1.5 + Math.random() * 2.5,
-        color: COLORS[category],
-        alpha: 0.5 + Math.random() * 0.5,
-        category,
-        connections: [],
-        rotAngle,
-        orbitRadius: isCentral ? 15 + Math.random() * 25 : orbitRadius,
-        orbitSpeed: (0.04 + Math.random() * 0.12) * (Math.random() > 0.5 ? 1 : -1) * 0.001,
-        orbitPhase,
-        highlighted: false,
-        highlightColor: "#4f8aff",
-        pulsePhase: Math.random() * Math.PI * 2,
-        elevSeed: Math.random() * 2 - 1,
-        z: 0,
-        scale: 1,
+        id: nodes.length,
+        position,
+        color: hubNode.color,
+        radius: 0.011 + rand() * 0.014,
+        isCentral: false,
+        connections: [hubId],
       });
     }
+  });
 
-    // Build connections
-    for (let i = 0; i < nodes.length; i++) {
-      const count = 1 + Math.floor(Math.random() * 3);
-      for (let j = 0; j < count; j++) {
-        const target = Math.floor(Math.random() * nodes.length);
-        if (target !== i && !nodes[i].connections.includes(target)) {
-          nodes[i].connections.push(target);
-        }
-      }
-      if (i >= CENTER_NODES && Math.random() < 0.15) {
-        const centerTarget = Math.floor(Math.random() * CENTER_NODES);
-        if (!nodes[i].connections.includes(centerTarget)) {
-          nodes[i].connections.push(centerTarget);
-        }
+  // Sparse long-range threads between hubs and the core, echoing the faint
+  // cross-globe connections in a real memory network.
+  hubIds.forEach((hubId) => {
+    if (rand() < 0.55) {
+      const other = rand() < 0.5 ? hubIds[Math.floor(rand() * hubIds.length)] : Math.floor(rand() * CENTER_NODES);
+      if (other !== hubId && !nodes[hubId].connections.includes(other)) {
+        nodes[hubId].connections.push(other);
       }
     }
+  });
 
-    nodesRef.current = nodes;
-  }, []);
+  return nodes;
+}
+
+// ── Wireframe globe — lat/long grid + a bright equatorial ring ─────────────
+function GlobeWireframe() {
+  const gridGeometry = useMemo(() => buildGlobeWireframe(GLOBE_RADIUS), []);
+  const equatorPoints = useMemo(() => buildEquatorRing(GLOBE_RADIUS), []);
+
+  return (
+    <group>
+      <lineSegments geometry={gridGeometry}>
+        <lineBasicMaterial color="#5b6a8f" transparent opacity={0.28} toneMapped={false} />
+      </lineSegments>
+      <Line points={equatorPoints} color="#cfe0ff" lineWidth={1.4} transparent opacity={0.75} toneMapped={false} />
+    </group>
+  );
+}
+
+// ── Glowing mark at the exact center of the globe ──────────────────────────
+function CentralHub() {
+  return (
+    <group>
+      <mesh>
+        <boxGeometry args={[0.09, 0.09, 0.09]} />
+        <meshBasicMaterial color="#f472b6" toneMapped={false} />
+      </mesh>
+      <mesh scale={2.4}>
+        <boxGeometry args={[0.09, 0.09, 0.09]} />
+        <meshBasicMaterial color="#f472b6" transparent opacity={0.16} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <pointLight color="#f472b6" intensity={1.2} distance={2.2} />
+    </group>
+  );
+}
+
+// ── Memory-node markers (instanced for 1000 nodes in one draw call) ────────
+function NodeMarkers({
+  nodes,
+  highlightedNodes,
+  searchActive,
+  searchKeyword,
+  onNodeClick,
+}: {
+  nodes: NodeLayout[];
+  highlightedNodes: Map<number, string>;
+  searchActive: boolean;
+  searchKeyword: string;
+  onNodeClick?: (nodeId: number, keyword: string) => void;
+}) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const tmpColor = useMemo(() => new THREE.Color(), []);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    nodes.forEach((node, i) => {
+      const hiColor = highlightedNodes.get(node.id);
+      const scale = hiColor ? node.radius * 2.1 : node.radius;
+      dummy.position.copy(node.position);
+      dummy.scale.setScalar(scale);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+      tmpColor.set(hiColor ?? (node.isCentral ? "#bcd0ff" : node.color));
+      mesh.setColorAt(i, tmpColor);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    // The default bounding sphere only covers the base (unit) geometry at the
+    // mesh's own origin — with instances scattered far from it, that stale
+    // sphere silently rejects raycasts (clicks/hover) on most instances as a
+    // broad-phase pretest failure. Recompute it now that matrices are set.
+    mesh.computeBoundingSphere();
+  }, [nodes, highlightedNodes, dummy, tmpColor]);
 
-    const resize = () => {
-      const w = canvas.offsetWidth;
-      const h = canvas.offsetHeight;
-      if (w === 0 || h === 0) return;
-      canvas.width = w * window.devicePixelRatio;
-      canvas.height = h * window.devicePixelRatio;
-      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-      if (nodesRef.current.length === 0) {
-        initNodes(w, h);
+  const handleClick = useCallback(
+    (e: ThreeEvent<MouseEvent>) => {
+      e.stopPropagation();
+      if (!searchActive || !onNodeClick) return;
+      const id = e.instanceId;
+      if (id == null) return;
+      const node = nodes[id];
+      if (!node || !highlightedNodes.has(node.id)) return;
+      onNodeClick(node.id, searchKeyword);
+    },
+    [nodes, highlightedNodes, searchActive, searchKeyword, onNodeClick]
+  );
+
+  const handlePointerOver = useCallback(
+    (e: ThreeEvent<PointerEvent>) => {
+      const id = e.instanceId;
+      if (id == null) return;
+      const node = nodes[id];
+      if (searchActive && node && highlightedNodes.has(node.id)) {
+        document.body.style.cursor = "pointer";
       }
-    };
+    },
+    [nodes, highlightedNodes, searchActive]
+  );
 
-    resize();
-
-    // ResizeObserver fires on ANY layout change (flex, panel open/close, window resize)
-    const observer = new ResizeObserver(() => resize());
-    observer.observe(canvas);
-    window.addEventListener("resize", resize);
-
-    let lastTime = performance.now();
-
-    const draw = (timestamp: number) => {
-      const dt = Math.min(timestamp - lastTime, 32);
-      lastTime = timestamp;
-      timeRef.current += dt;
-      const t = timeRef.current * 0.001;
-
-      const W = canvas.offsetWidth;
-      const H = canvas.offsetHeight;
-      const cx = W / 2;
-      const cy = H / 2;
-
-      ctx.clearRect(0, 0, W, H);
-
-      const nodes = nodesRef.current;
-      const kw = searchRef.current.toLowerCase().trim();
-      const hasSearch = kw.length > 1;
-      const hNodes = highlightedNodesRef.current;
-
-      // Update positions — real 3D: each node orbits in a disc (X/Z plane), the
-      // disc is tilted toward the camera, then rotated over time and projected
-      // with perspective so depth is genuine (near = bigger/brighter, far = smaller/dimmer).
-      const globalRot = t * 0.04;
-      const orbitScale = Math.min(W / initSizeRef.current.w, H / initSizeRef.current.h);
-      const FOCAL = Math.min(W, H) * 0.9;
-      for (let i = 0; i < nodes.length; i++) {
-        const node = nodes[i];
-
-        // Set highlight state and the correct platform color
-        const platformColor = hNodes.get(node.id);
-        node.highlighted = hasSearch && platformColor !== undefined;
-        if (node.highlighted) node.highlightColor = platformColor!;
-
-        node.orbitPhase += node.orbitSpeed * dt;
-        const wobble = Math.sin(t * 0.3 + node.pulsePhase) * 0.18;
-        const effectiveRadius = node.orbitRadius * orbitScale * (1 + wobble * 0.1);
-        const angle = node.orbitPhase + globalRot;
-
-        // Local 3D position within the disc, before it's tilted toward the camera
-        const localX = Math.cos(angle) * effectiveRadius;
-        const localZ = Math.sin(angle) * effectiveRadius;
-        const localY = node.elevSeed * effectiveRadius * 0.12 + Math.sin(t * 0.4 + node.pulsePhase) * 3;
-
-        // Tilt around the X-axis so the disc's own rotation reveals real depth
-        const rotY = localY * Math.cos(TILT) - localZ * Math.sin(TILT);
-        const rotZ = localY * Math.sin(TILT) + localZ * Math.cos(TILT);
-
-        const scale = FOCAL / (FOCAL + rotZ);
-        node.z = rotZ;
-        node.scale = scale;
-        node.x = cx + localX * scale;
-        node.y = cy + rotY * scale;
-      }
-
-      // Camera transform — user pan/zoom composes on top of the simulation's world
-      // coordinates. Translate+scale (rather than setTransform) so it composes with
-      // the devicePixelRatio scale already baked into the context by resize().
-      const zoom = zoomRef.current;
-      const pan = panRef.current;
-      const camTx = cx * (1 - zoom) + pan.x;
-      const camTy = cy * (1 - zoom) + pan.y;
-
-      ctx.save();
-      ctx.translate(camTx, camTy);
-      ctx.scale(zoom, zoom);
-
-      // Draw edges
-      ctx.save();
-      for (let i = 0; i < nodes.length; i++) {
-        const node = nodes[i];
-        for (const j of node.connections) {
-          const target = nodes[j];
-          const dx = target.x - node.x;
-          const dy = target.y - node.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist > 300) continue;
-
-          const depthFade = Math.max(0.3, Math.min(1.3, (node.scale + target.scale) / 2));
-          const alpha = Math.max(0, 1 - dist / 300) * 0.15 * depthFade;
-          const isHighlighted = node.highlighted && target.highlighted;
-
-          if (isHighlighted) {
-            ctx.strokeStyle = hexToRgba(node.highlightColor, 0.6 * depthFade);
-            ctx.lineWidth = 1.2;
-          } else {
-            ctx.strokeStyle = `rgba(99,130,255,${alpha})`;
-            ctx.lineWidth = 0.5;
-          }
-
-          ctx.beginPath();
-          ctx.moveTo(node.x, node.y);
-          ctx.lineTo(target.x, target.y);
-          ctx.stroke();
-        }
-      }
-      ctx.restore();
-
-      // Clear tracked positions each frame — only track highlighted nodes
-      nodePositionsRef.current.clear();
-
-      // Draw nodes — back-to-front (painter's algorithm) so nearer nodes correctly
-      // overlap farther ones, completing the 3D illusion.
-      const drawOrder = nodes.map((_, i) => i).sort((a, b) => nodes[b].z - nodes[a].z);
-      for (const i of drawOrder) {
-        const node = nodes[i];
-        const pulse = Math.sin(t * 2 + node.pulsePhase) * 0.3 + 0.7;
-        const depthAlpha = Math.max(0.35, Math.min(1.3, node.scale));
-        const scaledRadius = node.radius * node.scale;
-
-        ctx.save();
-
-        if (node.highlighted) {
-          const hc = node.highlightColor;
-          // Glow ring using real platform color
-          const glowRadius = scaledRadius * 3.5;
-          const glow = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, glowRadius);
-          glow.addColorStop(0, hexToRgba(hc, 0.9));
-          glow.addColorStop(0.5, hexToRgba(hc, 0.3));
-          glow.addColorStop(1, hexToRgba(hc, 0));
-          ctx.fillStyle = glow;
-          ctx.beginPath();
-          ctx.arc(node.x, node.y, glowRadius, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Outer ring
-          ctx.strokeStyle = hexToRgba(hc, 0.8);
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.arc(node.x, node.y, scaledRadius * 2 + 2, 0, Math.PI * 2);
-          ctx.stroke();
-
-          // Track for click detection (in screen space — mouse coords aren't
-          // affected by the canvas transform, so convert world → screen here).
-          nodePositionsRef.current.set(node.id, {
-            x: node.x * zoom + camTx,
-            y: node.y * zoom + camTy,
-            radius: Math.max((glowRadius + 4) * zoom, 18),
-          });
-        }
-
-        // Core dot — use platform color when highlighted
-        const dotColor = node.highlighted ? node.highlightColor : node.color;
-        const baseAlpha = (node.highlighted ? 1 : node.alpha * pulse) * depthAlpha;
-        ctx.globalAlpha = Math.min(1, baseAlpha);
-        ctx.fillStyle = dotColor;
-        ctx.shadowBlur = (node.highlighted ? 12 : node.radius > 3 ? 6 : 3) * node.scale;
-        ctx.shadowColor = dotColor;
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, scaledRadius * (node.highlighted ? 1.4 : 1), 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.restore();
-      }
-
-      // Date labels for highlighted nodes
-      if (hasSearch) {
-        const dates = nodeDatesRef.current;
-        ctx.save();
-        ctx.font = "bold 9px Inter, sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "bottom";
-        for (let i = 0; i < nodes.length; i++) {
-          const node = nodes[i];
-          if (!node.highlighted) continue;
-          const label = dates.get(node.id);
-          if (!label) continue;
-
-          const lx = node.x;
-          const ly = node.y - node.radius * 2.2 - 4;
-
-          // Pill background
-          const tw = ctx.measureText(label).width;
-          const pw = tw + 8;
-          const ph = 13;
-          ctx.save();
-          ctx.globalAlpha = 0.82;
-          ctx.fillStyle = node.highlightColor;
-          ctx.beginPath();
-          ctx.roundRect(lx - pw / 2, ly - ph, pw, ph, 4);
-          ctx.fill();
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = "#07090f";
-          ctx.fillText(label, lx, ly - 1);
-          ctx.restore();
-        }
-        ctx.restore();
-      }
-
-      // Center glow orb
-      const centerGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 80);
-      centerGlow.addColorStop(0, "rgba(79,138,255,0.18)");
-      centerGlow.addColorStop(0.5, "rgba(139,92,246,0.06)");
-      centerGlow.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = centerGlow;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 80, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.restore(); // end camera transform
-
-      frameRef.current = requestAnimationFrame(draw);
-    };
-
-    frameRef.current = requestAnimationFrame(draw);
-
-    // ── Pan (mouse drag) ────────────────────────────────────────────────────
-    const onMouseDown = (e: MouseEvent) => {
-      isDraggingRef.current = true;
-      didDragRef.current = false;
-      dragStartRef.current = { x: e.clientX, y: e.clientY, panX: panRef.current.x, panY: panRef.current.y };
-      canvas.style.cursor = "grabbing";
-    };
-    const onWindowMouseMove = (e: MouseEvent) => {
-      if (!isDraggingRef.current) return;
-      const dx = e.clientX - dragStartRef.current.x;
-      const dy = e.clientY - dragStartRef.current.y;
-      if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) didDragRef.current = true;
-      panRef.current = { x: dragStartRef.current.panX + dx, y: dragStartRef.current.panY + dy };
-    };
-    const onWindowMouseUp = () => {
-      if (!isDraggingRef.current) return;
-      isDraggingRef.current = false;
-      canvas.style.cursor = "default";
-    };
-
-    // ── Zoom (wheel, cursor-anchored) ───────────────────────────────────────
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      const w = canvas.offsetWidth;
-      const h = canvas.offsetHeight;
-      const ccx = w / 2;
-      const ccy = h / 2;
-      const oldZoom = zoomRef.current;
-      const factor = Math.exp(-e.deltaY * 0.0012);
-      const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, oldZoom * factor));
-
-      const oldTx = ccx * (1 - oldZoom) + panRef.current.x;
-      const oldTy = ccy * (1 - oldZoom) + panRef.current.y;
-      const worldX = (mx - oldTx) / oldZoom;
-      const worldY = (my - oldTy) / oldZoom;
-
-      panRef.current = {
-        x: mx - worldX * newZoom - ccx * (1 - newZoom),
-        y: my - worldY * newZoom - ccy * (1 - newZoom),
-      };
-      zoomRef.current = newZoom;
-    };
-
-    // ── Touch: one-finger pan, two-finger pinch zoom ────────────────────────
-    const touchDist = (touches: TouchList) =>
-      Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
-
-    const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 1) {
-        isDraggingRef.current = true;
-        didDragRef.current = false;
-        const t0 = e.touches[0];
-        dragStartRef.current = { x: t0.clientX, y: t0.clientY, panX: panRef.current.x, panY: panRef.current.y };
-      } else if (e.touches.length === 2) {
-        isDraggingRef.current = false;
-        pinchRef.current = { dist: touchDist(e.touches), zoom: zoomRef.current };
-      }
-    };
-    const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length === 2 && pinchRef.current) {
-        e.preventDefault();
-        const dist = touchDist(e.touches);
-        const scaleFactor = dist / pinchRef.current.dist;
-        zoomRef.current = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, pinchRef.current.zoom * scaleFactor));
-      } else if (e.touches.length === 1 && isDraggingRef.current) {
-        e.preventDefault();
-        const t0 = e.touches[0];
-        const dx = t0.clientX - dragStartRef.current.x;
-        const dy = t0.clientY - dragStartRef.current.y;
-        if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) didDragRef.current = true;
-        panRef.current = { x: dragStartRef.current.panX + dx, y: dragStartRef.current.panY + dy };
-      }
-    };
-    const onTouchEnd = (e: TouchEvent) => {
-      pinchRef.current = null;
-      if (e.touches.length === 0) {
-        isDraggingRef.current = false;
-      } else if (e.touches.length === 1) {
-        const t0 = e.touches[0];
-        dragStartRef.current = { x: t0.clientX, y: t0.clientY, panX: panRef.current.x, panY: panRef.current.y };
-      }
-    };
-
-    canvas.addEventListener("mousedown", onMouseDown);
-    window.addEventListener("mousemove", onWindowMouseMove);
-    window.addEventListener("mouseup", onWindowMouseUp);
-    canvas.addEventListener("wheel", onWheel, { passive: false });
-    canvas.addEventListener("touchstart", onTouchStart, { passive: true });
-    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
-    canvas.addEventListener("touchend", onTouchEnd, { passive: true });
-
-    return () => {
-      cancelAnimationFrame(frameRef.current);
-      observer.disconnect();
-      window.removeEventListener("resize", resize);
-      canvas.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("mousemove", onWindowMouseMove);
-      window.removeEventListener("mouseup", onWindowMouseUp);
-      canvas.removeEventListener("wheel", onWheel);
-      canvas.removeEventListener("touchstart", onTouchStart);
-      canvas.removeEventListener("touchmove", onTouchMove);
-      canvas.removeEventListener("touchend", onTouchEnd);
-    };
-  }, [initNodes]);
-
-  // Sync search keyword
-  useEffect(() => {
-    searchRef.current = searchKeyword;
-  }, [searchKeyword]);
-
-  // Sync highlighted nodes map
-  useEffect(() => {
-    highlightedNodesRef.current = highlightedNodes ?? new Map();
-  }, [highlightedNodes]);
-
-  // Sync node date labels map
-  useEffect(() => {
-    nodeDatesRef.current = nodeDates ?? new Map();
-  }, [nodeDates]);
-
-  // Returns the nodeId under the mouse, or null
-  const hitTest = useCallback((e: React.MouseEvent<HTMLCanvasElement>): number | null => {
-    const canvas = canvasRef.current;
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    for (const [nodeId, nodePos] of nodePositionsRef.current.entries()) {
-      const dx = nodePos.x - x;
-      const dy = nodePos.y - y;
-      if (Math.sqrt(dx * dx + dy * dy) < nodePos.radius) return nodeId;
-    }
-    return null;
-  }, []);
-
-  // Pointer cursor only when hovering a highlighted node (skip while panning)
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas || isDraggingRef.current) return;
-    canvas.style.cursor = hitTest(e) !== null ? "pointer" : "grab";
-  }, [hitTest]);
-
-  // Handle canvas click — ignored if the mouse/touch just panned the camera
-  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (didDragRef.current) {
-      didDragRef.current = false;
-      return;
-    }
-    if (!onNodeClick) return;
-    if (searchRef.current.trim().length < 2) return;
-    const nodeId = hitTest(e);
-    if (nodeId !== null) onNodeClick(nodeId, searchRef.current);
-  }, [onNodeClick, hitTest]);
-
-  const zoomBy = useCallback((factor: number) => {
-    zoomRef.current = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoomRef.current * factor));
-  }, []);
-  const resetView = useCallback(() => {
-    zoomRef.current = 1;
-    panRef.current = { x: 0, y: 0 };
+  const handlePointerOut = useCallback(() => {
+    document.body.style.cursor = "default";
   }, []);
 
   return (
-    <div className="relative w-full h-full">
-      <canvas
-        ref={canvasRef}
-        onClick={handleCanvasClick}
-        onMouseMove={handleMouseMove}
-        style={{
-          width: "100%",
-          height: "100%",
-          display: "block",
-          cursor: "grab",
+    <instancedMesh
+      ref={meshRef}
+      args={[undefined, undefined, nodes.length]}
+      onClick={handleClick}
+      onPointerOver={handlePointerOver}
+      onPointerOut={handlePointerOut}
+    >
+      <sphereGeometry args={[1, 8, 8]} />
+      <meshBasicMaterial toneMapped={false} />
+    </instancedMesh>
+  );
+}
+
+// ── Always-on faint threads from every ray node back to its cluster hub ────
+function ClusterEdges({ nodes }: { nodes: NodeLayout[] }) {
+  const geometry = useMemo(() => {
+    const points: number[] = [];
+    const colors: number[] = [];
+    const color = new THREE.Color();
+    for (const node of nodes) {
+      for (const j of node.connections) {
+        const target = nodes[j];
+        if (!target) continue;
+        points.push(node.position.x, node.position.y, node.position.z);
+        points.push(target.position.x, target.position.y, target.position.z);
+        color.set(node.color);
+        colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    return geo;
+  }, [nodes]);
+
+  return (
+    <lineSegments geometry={geometry}>
+      <lineBasicMaterial vertexColors transparent opacity={0.16} toneMapped={false} />
+    </lineSegments>
+  );
+}
+
+// ── Faint edges between currently-highlighted (search-matched) nodes ───────
+function HighlightEdges({ nodes, highlightedNodes }: { nodes: NodeLayout[]; highlightedNodes: Map<number, string> }) {
+  const geometry = useMemo(() => {
+    if (highlightedNodes.size === 0) return null;
+    const points: number[] = [];
+    const colors: number[] = [];
+    const color = new THREE.Color();
+    for (const node of nodes) {
+      if (!highlightedNodes.has(node.id)) continue;
+      for (const j of node.connections) {
+        const target = nodes[j];
+        if (!target || !highlightedNodes.has(target.id)) continue;
+        points.push(node.position.x, node.position.y, node.position.z);
+        points.push(target.position.x, target.position.y, target.position.z);
+        color.set(highlightedNodes.get(node.id)!);
+        colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+      }
+    }
+    if (points.length === 0) return null;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    return geo;
+  }, [nodes, highlightedNodes]);
+
+  if (!geometry) return null;
+  return (
+    <lineSegments geometry={geometry}>
+      <lineBasicMaterial vertexColors transparent opacity={0.55} toneMapped={false} />
+    </lineSegments>
+  );
+}
+
+// ── Date-label pills above highlighted nodes ────────────────────────────────
+function DateLabels({
+  nodes,
+  highlightedNodes,
+  nodeDates,
+}: {
+  nodes: NodeLayout[];
+  highlightedNodes: Map<number, string>;
+  nodeDates: Map<number, string>;
+}) {
+  if (highlightedNodes.size === 0 || nodeDates.size === 0) return null;
+  return (
+    <>
+      {nodes.map((node) => {
+        if (!highlightedNodes.has(node.id)) return null;
+        const label = nodeDates.get(node.id);
+        if (!label) return null;
+        const color = highlightedNodes.get(node.id)!;
+        return (
+          <Html key={node.id} position={node.position} center distanceFactor={6} style={{ pointerEvents: "none" }}>
+            <div
+              style={{
+                background: color,
+                color: "#07090f",
+                fontSize: 9,
+                fontWeight: 700,
+                padding: "2px 6px",
+                borderRadius: 4,
+                transform: "translateY(-14px)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {label}
+            </div>
+          </Html>
+        );
+      })}
+    </>
+  );
+}
+
+// TEMP-DEBUG: remove before shipping — exposes camera+nodes for automated click testing
+function TempDebugExpose({ nodes, highlightedNodes }: { nodes: NodeLayout[]; highlightedNodes: Map<number, string> }) {
+  useFrame(({ camera, size }) => {
+    (window as any).__brainDebug = { camera, nodes, highlightedNodes, size };
+  });
+  return null;
+}
+
+function AutoRotate({ controlsRef, paused }: { controlsRef: React.RefObject<any>; paused?: boolean }) {
+  useFrame((_, delta) => {
+    const controls = controlsRef.current;
+    if (!controls || controls.__dragging || paused) return;
+    controls.setAzimuthalAngle(controls.getAzimuthalAngle() + delta * 0.12);
+  });
+  return null;
+}
+
+// Reports the current camera-to-target distance as a coarse zoom category,
+// only firing the callback when the category actually changes.
+function ZoomReporter({ controlsRef, onChange }: { controlsRef: React.RefObject<any>; onChange?: (level: ZoomLevel) => void }) {
+  const lastLevel = useRef<ZoomLevel | null>(null);
+  useFrame(() => {
+    const controls = controlsRef.current;
+    if (!controls || !onChange) return;
+    const dist = controls.object.position.distanceTo(controls.target);
+    const level: ZoomLevel = dist > ZOOM_FAR ? "far" : dist < ZOOM_NEAR ? "near" : "mid";
+    if (level !== lastLevel.current) {
+      lastLevel.current = level;
+      onChange(level);
+    }
+  });
+  return null;
+}
+
+// ── Scene root ───────────────────────────────────────────────────────────
+function Scene({
+  nodes,
+  highlightedNodes,
+  nodeDates,
+  searchActive,
+  searchKeyword,
+  onNodeClick,
+  controlsRef,
+  locked,
+  onZoomLevelChange,
+}: {
+  nodes: NodeLayout[];
+  highlightedNodes: Map<number, string>;
+  nodeDates: Map<number, string>;
+  searchActive: boolean;
+  searchKeyword: string;
+  onNodeClick?: (nodeId: number, keyword: string) => void;
+  controlsRef: React.RefObject<any>;
+  locked?: boolean;
+  onZoomLevelChange?: (level: ZoomLevel) => void;
+}) {
+  return (
+    <>
+      <ambientLight intensity={0.42} />
+      <directionalLight position={[3, 4, 5]} intensity={1.25} color="#ffffff" />
+      <directionalLight position={[-4, -2, -3]} intensity={0.5} color="#4f8aff" />
+      <pointLight position={[0, 0.5, 2.5]} intensity={0.5} color="#8b5cf6" />
+
+      <GlobeWireframe />
+      <CentralHub />
+      <ClusterEdges nodes={nodes} />
+      <NodeMarkers
+        nodes={nodes}
+        highlightedNodes={highlightedNodes}
+        searchActive={searchActive}
+        searchKeyword={searchKeyword}
+        onNodeClick={onNodeClick}
+      />
+      <HighlightEdges nodes={nodes} highlightedNodes={highlightedNodes} />
+      <DateLabels nodes={nodes} highlightedNodes={highlightedNodes} nodeDates={nodeDates} />
+
+      <AutoRotate controlsRef={controlsRef} paused={locked} />
+      <ZoomReporter controlsRef={controlsRef} onChange={onZoomLevelChange} />
+      <TempDebugExpose nodes={nodes} highlightedNodes={highlightedNodes} />
+      <OrbitControls
+        ref={controlsRef}
+        enablePan={false}
+        enableRotate={!locked}
+        enableZoom={!locked}
+        enableDamping
+        dampingFactor={0.08}
+        minDistance={MIN_DIST}
+        maxDistance={MAX_DIST}
+        onStart={() => {
+          if (controlsRef.current) controlsRef.current.__dragging = true;
+        }}
+        onEnd={() => {
+          if (controlsRef.current) controlsRef.current.__dragging = false;
         }}
       />
+    </>
+  );
+}
+
+export const ObsidianGraph = forwardRef<ObsidianGraphHandle, ObsidianGraphProps>(function ObsidianGraph(
+  { searchKeyword, highlightedNodes, nodeDates, onNodeClick, locked, onZoomLevelChange },
+  ref
+) {
+  const nodes = useMemo(() => buildNodeLayout(), []);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const controlsRef = useRef<any>(null);
+
+  const kw = searchKeyword.toLowerCase().trim();
+  const searchActive = kw.length > 1;
+  const hNodes = useMemo(
+    () => (searchActive ? (highlightedNodes ?? new Map()) : new Map<number, string>()),
+    [searchActive, highlightedNodes]
+  );
+
+  const zoomBy = useCallback((factor: number) => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    const camera = controls.object as THREE.PerspectiveCamera;
+    const dir = new THREE.Vector3().subVectors(camera.position, controls.target);
+    const newLen = THREE.MathUtils.clamp(dir.length() / factor, MIN_DIST, MAX_DIST);
+    dir.setLength(newLen);
+    camera.position.copy(controls.target).add(dir);
+    controls.update();
+  }, []);
+
+  const resetView = useCallback(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    controls.object.position.set(0, 0, DEFAULT_DIST);
+    controls.target.set(0, 0, 0);
+    controls.update();
+  }, []);
+
+  useImperativeHandle(ref, () => ({ focus: resetView }), [resetView]);
+
+  return (
+    <div className="relative w-full h-full">
+      <Canvas
+        dpr={[1, 1.75]}
+        camera={{ position: [0, 0, DEFAULT_DIST], fov: 45, near: 0.1, far: 50 }}
+        style={{ width: "100%", height: "100%", display: "block" }}
+      >
+        <Suspense fallback={null}>
+          <Scene
+            nodes={nodes}
+            highlightedNodes={hNodes}
+            nodeDates={nodeDates ?? new Map()}
+            searchActive={searchActive}
+            searchKeyword={searchKeyword}
+            onNodeClick={onNodeClick}
+            controlsRef={controlsRef}
+            locked={locked}
+            onZoomLevelChange={onZoomLevelChange}
+          />
+        </Suspense>
+      </Canvas>
 
       {/* Floating zoom controls */}
       <div className="absolute bottom-4 right-4 flex flex-col gap-1.5 z-10">
@@ -598,4 +573,4 @@ export function ObsidianGraph({ searchKeyword, highlightedNodes, nodeDates, onNo
       </div>
     </div>
   );
-}
+});

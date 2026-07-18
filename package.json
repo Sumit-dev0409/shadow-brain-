@@ -2,6 +2,9 @@
   "name": "shadow-brain",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,14 +12,21 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
+    "archiver": "^8.0.0",
     "framer-motion": "^12.40.0",
     "lucide-react": "^1.20.0",
+    "mongodb": "^7.5.0",
     "next": "16.2.9",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "simplex-noise": "^4.0.3",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/archiver": "^8.0.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

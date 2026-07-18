@@ -1,4 +1,5 @@
-﻿// Brain Shadow — Background Service Worker (Blackbox AI)
+﻿
+// Brain Shadow — Background Service Worker (Blackbox AI)
 
 const STORAGE_KEY     = 'brain_shadow_conversations';
 const META_KEY        = 'brain_shadow_meta';
@@ -16,7 +17,10 @@ async function saveConversation(data, source = 'realtime') {
     conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source };
     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
     await updateMeta(conversations);
-    // Sync handled by popup (MV3 service workers cannot fetch localhost)
+    // Sync to backend immediately (fire and forget)
+    syncToBackend(data).catch(err => {
+      console.warn('[Brain Shadow] Backend sync failed (local save OK):', err.message);
+    });
     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴 Live' : '📦 Bulk'} saved: ${data.title} (${data.messages.length} msgs)`);
     return { status: 'saved', key };
   } catch (err) { return { status: 'error', error: err.message }; }
@@ -80,3 +84,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 console.log('[Brain Shadow] Blackbox background service worker started');
+

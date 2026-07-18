@@ -13,29 +13,24 @@ const authRoutes         = require('./routes/auth.routes');
 
 const app = express();
 
-// Allow Next.js frontend, localhost, all Chrome extensions, and any deployed
-// frontend origins listed in FRONTEND_URL (comma-separated, e.g. your Vercel URL)
-const allowedOrigins = (process.env.FRONTEND_URL || '')
-  .split(',')
-  .map((o) => o.trim())
-  .filter(Boolean);
-
-app.use(cors({
-  origin: (origin, callback) => {
-    if (
-      !origin ||
-      origin.startsWith('chrome-extension://') ||
-      origin.startsWith('http://localhost') ||
-      origin.startsWith('http://127.0.0.1') ||
-      allowedOrigins.includes(origin)
-    ) {
-      callback(null, true);
-    } else {
-      callback(new Error('CORS: origin not allowed'));
-    }
-  },
-  credentials: true,
-}));
+// Allow the local Next.js frontend, localhost, and all Chrome extensions.
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (
+        !origin ||
+        origin.startsWith('chrome-extension://') ||
+        origin.startsWith('http://localhost') ||
+        origin.startsWith('http://127.0.0.1')
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error('CORS: origin not allowed'));
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 app.use(morgan('dev'));
