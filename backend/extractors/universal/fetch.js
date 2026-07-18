@@ -42,8 +42,8 @@ function claudeConfig() {
   return {
     platform:   'claude',
     convUrlRe:  /\/(?:chat|c|conversation)\/([a-zA-Z0-9_\-]{4,})/,
-    userSel:    ['[data-testid*="human"]', '[data-testid*="user"]', '[class*="humanMessage"]'],
-    asstSel:    ['[data-testid*="assistant"]', '[class*="assistantMessage"]'],
+    userSel:    ['[data-testid*="human"]', '[data-testid*="user"]', '[class*="humanMessage"]', '[class*="font-user-message"]'],
+    asstSel:    ['[data-testid*="assistant"]', '[class*="assistantMessage"]', '[class*="font-claude-message"]', '[class*="font-claude-response"]'],
     streaming:  ['button[aria-label="Stop generating"]', '[data-testid="stop-button"]'],
     extractId:  url => { const m = url.match(/\/(?:chat|c|conversation)\/([\w\-]+)/); return m?.[1] || url; },
     titleClean: t => t.replace(' - Claude', '').replace(' | Claude', ''),
@@ -78,8 +78,8 @@ function deepseekConfig() {
   return {
     platform:   'deepseek',
     convUrlRe:  /\/chat\/s\/([a-zA-Z0-9_\-]{4,})/,
-    userSel:    ['[class*="userMessage"]', '[class*="user-message"]', '[class*="humanMessage"]'],
-    asstSel:    ['.ds-markdown', '[class*="ds-markdown"]', '[class*="assistantMessage"]', '[class*="markdownContent"]'],
+    userSel:    ['[class*="userMessage"]', '[class*="user-message"]', '[class*="humanMessage"]', '[class*="message_user"]', '[class*="_userContent"]'],
+    asstSel:    ['.ds-markdown', '[class*="ds-markdown"]', '[class*="assistantMessage"]', '[class*="markdownContent"]', '[class*="message_assistant"]'],
     streaming:  ['[class*="stopButton"]', 'button[aria-label*="Stop" i]', '[class*="generating"]'],
     extractId:  url => { try { const p = new URL(url).pathname.split('/').filter(Boolean); const i = p.findLastIndex(x=>x==='chat'); if(i!==-1){const after=p.slice(i+1);const u=after.find(s=>s.length>=8&&s!=='s');if(u)return u;} return p[p.length-1]; } catch { return url; } },
     titleClean: t => t.replace(' - DeepSeek', '').replace(' | DeepSeek', ''),
@@ -125,9 +125,34 @@ function perplexityConfig() {
 
     // Custom extractor — Perplexity is a search engine, not a chat.
     extractCustom() {
-      // ── User query: from URL slug (always works) ───────────
-      const slug  = location.pathname.split('/').filter(Boolean).pop() || '';
-      const query = slug.replace(/-[A-Za-z0-9]{6,}$/, '').replace(/-/g, ' ').trim()
+      // ── User query ──────────────────────────────────────────
+      // Prefer the question as actually displayed on the page — Perplexity
+      // renders it as a heading above the answer. This is far more reliable
+      // than guessing from the URL slug, which is sometimes just the raw
+      // conversation id with no descriptive words in it at all (e.g. a
+      // shared link, or a slug Perplexity didn't bother generating) — that
+      // previously saved literal ids like "316a8535 e661 40b1 b51b" as the
+      // "question" instead of what was actually asked.
+      const headingSel = [
+        'h1', '[class*="Query" i] h1', '[class*="query" i] h1',
+        '[data-testid*="query" i]', '[class*="QueryText" i]', '[class*="query-text" i]',
+      ];
+      let domQuery = '';
+      for (const sel of headingSel) {
+        let el; try { el = document.querySelector(sel); } catch { continue; }
+        const t = el?.innerText?.trim();
+        if (t && t.length > 2 && t.length < 500) { domQuery = t; break; }
+      }
+
+      const slug = location.pathname.split('/').filter(Boolean).pop() || '';
+      const slugQuery = slug.replace(/-[A-Za-z0-9]{6,}$/, '').replace(/-/g, ' ').trim();
+      // A slug that's really just the bare id (stripping the trailing id
+      // suffix removed nothing, so swapping dashes for spaces just turns the
+      // id itself into space-separated hex chunks) is not a real question.
+      const looksLikeBareId = slugQuery && (!slugQuery.includes(' ') || /^[0-9a-f\s]+$/i.test(slugQuery));
+
+      const query = domQuery
+        || (slugQuery && !looksLikeBareId ? slugQuery : '')
         || document.title.replace(/ [-|] Perplexity.*$/i, '').trim()
         || 'Search query';
 
@@ -181,6 +206,12 @@ function grokConfig() {
   };
 }
 
+// Known non-conversation path segments that can still structurally match a
+// platform's convUrlRe (e.g. Gemini's own promo link "/app/download" matches
+// "/app/<4+ chars>" exactly as well as a real "/app/<chat-id>" does) — used
+// wherever a URL's captured id needs to be checked for being an actual chat.
+const NON_CONVERSATION_IDS = /^(login|signup|settings|help|about|privacy|terms|logout|new|upgrade|billing|home|discover|download|library|app|search|explore|account|profile)$/i;
+
 // ── Detect current platform ────────────────────────────────
 const host   = location.hostname;
 const config = PLATFORM_CONFIGS[host] || Object.entries(PLATFORM_CONFIGS).find(([h]) => host.includes(h))?.[1];
@@ -233,9 +264,19 @@ function init() {
       c.scrollTop = 0;
       let pos = 0;
       const step = Math.max(300, Math.floor((c.clientHeight || 600) * 0.75));
-      const tick = () => { pos += step; c.scrollTop = pos; setTimeout(() => { pos < c.scrollHeight ? tick() : resolve(); }, 500); };
+      const finish = () => {
+        // Virtualized message lists (ChatGPT, and likely others) unmount the
+        // earliest messages once we've scrolled well past them. If we scrape
+        // right after landing at the bottom, the first user message is often
+        // gone from the DOM — that's what produces captures that start with
+        // "assistant" instead of "user". Scroll back to the top and give the
+        // list a moment to re-render there before scraping.
+        c.scrollTop = 0;
+        setTimeout(resolve, 700);
+      };
+      const tick = () => { pos += step; c.scrollTop = pos; setTimeout(() => { pos < c.scrollHeight ? tick() : finish(); }, 500); };
       setTimeout(tick, 400);
-      setTimeout(resolve, 30_000);
+      setTimeout(finish, 30_000);
     });
   }
 
@@ -326,15 +367,34 @@ function scrapeConversation() {
     // it's the most likely source of scrambled/wrong role assignment.
     if (!userEls.length && !asstEls.length) {
       console.warn(`[Brain Shadow][debug] ${config.platform}: no configured selector matched ANYTHING — falling back to fragile container heuristic. This platform's selectors likely need updating.`);
-      for (const sel of ['[class*="chatContent"]','[class*="messageList"]','[class*="conversation"]','main']) {
-        const c = document.querySelector(sel);
+      const candidates = [
+        '[class*="chatContent"]', '[class*="messageList"]', '[class*="MessageList"]',
+        '[class*="conversation"]', '[class*="Conversation"]', '[class*="chat-list"]',
+        '[class*="ChatList"]', '[role="log"]', 'main',
+      ];
+      for (const sel of candidates) {
+        let c;
+        try { c = document.querySelector(sel); } catch { continue; }
         if (!c) continue;
-        const children = [...c.children].filter(el => el.innerText?.trim().length > 3);
-        if (children.length >= 2) {
-          console.warn(`[Brain Shadow][debug] ${config.platform}: container fallback matched "${sel}" with ${children.length} children — alternating even/odd as user/assistant (fragile).`);
-          children.forEach((el, i) => (i % 2 === 0 ? userEls : asstEls).push(el));
+        // Many modern layouts wrap the actual message list in one or more
+        // single-child "container" divs (e.g. <main><div class="layout">
+        // <div class="scroller">...actual messages...</div></div></main>),
+        // so looking only at the immediate children of a coarse container
+        // selector like "main" usually finds just 1 wrapper, not the real
+        // messages. Drill down through single-child chains until we reach a
+        // level that actually branches into multiple text-bearing children.
+        let node = c;
+        for (let depth = 0; depth < 6; depth++) {
+          const children = [...node.children].filter(el => (el.innerText?.trim().length || 0) > 3);
+          if (children.length >= 2) {
+            console.warn(`[Brain Shadow][debug] ${config.platform}: container fallback matched "${sel}" (drilled ${depth} level(s) deep) with ${children.length} children — alternating even/odd as user/assistant (fragile).`);
+            children.forEach((el, i) => (i % 2 === 0 ? userEls : asstEls).push(el));
+            break;
+          }
+          if (node.children.length === 1) { node = node.children[0]; continue; }
           break;
         }
+        if (userEls.length || asstEls.length) break;
       }
     }
 
@@ -353,7 +413,17 @@ function scrapeConversation() {
       .filter(Boolean);
 
     messages = deduplicateConsecutiveRoles(messages);
-    const last = messages[messages.length - 1];
+    const first = messages[0];
+    const last  = messages[messages.length - 1];
+    // A conversation must start with the user's message. If it doesn't, the
+    // capture is incomplete (usually because a virtualized message list had
+    // already unmounted the earliest turns) — save nothing rather than store
+    // a permanently-corrupt conversation that's missing its own opening.
+    if (!first || first.role !== 'user') {
+      console.warn(`[Brain Shadow][debug] ${config.platform}: first message role is "${first?.role || 'none'}", not "user" — discarding capture (likely missed via scroll/virtualization).`);
+      console.log(`[Brain Shadow][debug] ${config.platform} message roles in order: ` + messages.map(m => m.role).join(', '));
+      return null;
+    }
     if (!last || last.role !== 'assistant') {
       console.warn(`[Brain Shadow][debug] ${config.platform}: last message role is "${last?.role || 'none'}", not "assistant" — discarding capture. If role assignment looks backwards below, the fragile container fallback likely mixed up user/assistant order.`);
       console.log(`[Brain Shadow][debug] ${config.platform} message roles in order: ` + messages.map(m => m.role).join(', '));
@@ -379,6 +449,19 @@ function scrapeConversation() {
     if (isCapturing) return { status: 'busy' };
     isCapturing = true;
     try {
+      // Only capture on an actual conversation-shaped URL. Without this, the
+      // always-on observer fires on ANY page load (a landing page, the bare
+      // app root, a "download the app" link, a library/search-home view) and
+      // happily "captures" it — extractId falls back to whatever's left in
+      // the path (e.g. "app", "download") or the raw URL, saving a garbage
+      // conversation that pollutes storage and can never be cleaned up by
+      // re-scraping. Real per-conversation URLs always match convUrlRe, and
+      // their captured id is never one of the known non-conversation words
+      // (some promo/nav links coincidentally match the same URL shape).
+      if (config.convUrlRe) {
+        const m = config.convUrlRe.exec(location.href);
+        if (!m || NON_CONVERSATION_IDS.test(m[1])) return { status: 'empty' };
+      }
       await waitForStreamingToFinish();
       if (scroll) await scrollToLoadAllMessages();
       const conversation = scrapeCustom() || scrapeConversation();
@@ -420,6 +503,8 @@ function scrapeConversation() {
     for (const link of allLinks) {
       const href = link.href || '';
       if (config.convUrlRe && !config.convUrlRe.test(href)) continue;
+      const capturedId = config.convUrlRe?.exec(href)?.[1];
+      if (capturedId && NON_CONVERSATION_IDS.test(capturedId)) continue;
       let canonical; try { const u = new URL(href); canonical = `${u.origin}${u.pathname}`; } catch { continue; }
       if (seen.has(canonical)) continue; seen.add(canonical);
       const title = link.getAttribute('aria-label')?.trim() || link.getAttribute('title')?.trim() ||
@@ -428,10 +513,14 @@ function scrapeConversation() {
       threads.push({ url: canonical, title: title.slice(0, 120) });
     }
 
-    // Pass 2 — broad UUID fallback
-    if (threads.length === 0) {
-      console.warn('[Brain Shadow] Regex matched 0 — broad UUID scan');
-      const SKIP = /\/(login|signup|settings|help|about|privacy|terms|logout|new|upgrade|billing|home|discover)\b/i;
+    // Pass 2 — broad UUID fallback. Previously this only ran when Pass 1
+    // found literally nothing, but a platform whose sidebar links don't all
+    // match convUrlRe (or whose regex is slightly off) would silently miss
+    // conversations Pass 1 didn't catch, without ever trying the broader
+    // heuristic. Always run it and merge in anything new.
+    {
+      const before = threads.length;
+      const SKIP = new RegExp(`\\/${NON_CONVERSATION_IDS.source.slice(1, -1)}\\b`, 'i');
       for (const link of allLinks) {
         let u; try { u = new URL(link.href); } catch { continue; }
         if (u.origin !== location.origin) continue;
@@ -442,7 +531,7 @@ function scrapeConversation() {
         const title = link.getAttribute('aria-label')?.trim() || link.innerText?.trim() || `Chat ${threads.length + 1}`;
         threads.push({ url: canonical, title: title.slice(0, 120) });
       }
-      if (threads.length > 0) console.log(`[Brain Shadow] Broad scan found ${threads.length}`);
+      if (threads.length > before) console.log(`[Brain Shadow] Broad scan added ${threads.length - before} more (${before} from regex pass)`);
     }
 
     // DeepSeek: also try localStorage
