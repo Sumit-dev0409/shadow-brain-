@@ -14,9 +14,8 @@ const conversationSchema = new mongoose.Schema(
         'chatgpt', 'claude', 'gemini',
         'deepseek', 'blackbox', 'copilot', 'mscopilot',
         'perplexity', 'grok',
+        'brain-shadow',
       ],
-      lowercase: true,
-      trim: true,
     },
     title: {
       type: String,

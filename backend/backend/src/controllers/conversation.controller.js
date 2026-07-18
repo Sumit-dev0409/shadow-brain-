@@ -4,114 +4,66 @@ const groqService = require('../services/groq.service');
 const logger = require('../utils/logger');
 
 const createConversation = async (req, res, next) => {
-  const startTime = Date.now();
   try {
-    console.log(`\n[CONTROLLER] ─── createConversation START ───`);
-    console.log(`[CONTROLLER] Timestamp: ${new Date().toISOString()}`);
-    console.log(`[CONTROLLER] Body keys: ${Object.keys(req.body || {}).join(', ')}`);
+    logger.info('DEBUG: [REQUEST RECEIVED] POST /api/conversations');
+    logger.debug('DEBUG: Body:', JSON.stringify(req.body, null, 2));
 
     if (!req.body || Object.keys(req.body).length === 0) {
-      console.warn(`[CONTROLLER] Empty request body — returning 400`);
+      logger.warn('DEBUG: Empty request body received');
       return res.status(400).json({ message: 'Empty request body' });
     }
 
-    const { platform, external_id, title, messages } = req.body;
-    console.log(`[CONTROLLER] platform: "${platform}"`);
-    console.log(`[CONTROLLER] external_id: "${external_id}"`);
-    console.log(`[CONTROLLER] title: "${(title || '').substring(0, 60)}"`);
-    console.log(`[CONTROLLER] messages count: ${(messages || []).length}`);
-
-    // Validate platform enum before hitting the service
-    const VALID_PLATFORMS = ['chatgpt', 'claude', 'gemini', 'deepseek', 'blackbox', 'copilot', 'mscopilot', 'perplexity', 'grok'];
-    const normalizedPlatform = platform ? platform.toLowerCase() : 'chatgpt';
-    if (!VALID_PLATFORMS.includes(normalizedPlatform)) {
-      console.error(`[CONTROLLER] INVALID PLATFORM: "${platform}" → normalized "${normalizedPlatform}"`);
-      console.error(`[CONTROLLER] Valid platforms: ${VALID_PLATFORMS.join(', ')}`);
-      return res.status(400).json({
-        message: `Invalid platform: "${platform}". Valid: ${VALID_PLATFORMS.join(', ')}`
-      });
-    }
-
-    console.log(`[CONTROLLER] Calling conversationService.createOrUpdate...`);
     const conversation = await conversationService.createOrUpdate(req.body);
-    console.log(`[CONTROLLER] Service returned: _id=${conversation._id}, platform=${conversation.platform}, status=${conversation.status}`);
-    console.log(`[CONTROLLER] Messages stored: ${conversation.messages?.length}`);
-    console.log(`[CONTROLLER] DB write confirmed in ${Date.now() - startTime}ms`);
+    logger.info(`[CAPTURE] ${conversation.platform} | "${conversation.title?.slice(0,50)}" | ${conversation.messages?.length} msgs | status: ${conversation.status}`);
     
     // Trigger enrichment immediately (no queue)
     setImmediate(() => {
-      console.log(`[CONTROLLER] Triggering enrichment for ${conversation._id}`);
+      logger.info(`DEBUG: [ENRICHMENT TRIGGERED] for ${conversation._id}`);
       enrichmentService.process(conversation._id).catch(err => {
-        console.error(`[CONTROLLER] Background enrichment failed for ${conversation._id}: ${err.message}`);
-        console.error(`[CONTROLLER] Enrichment error stack: ${err.stack}`);
+        logger.error(`DEBUG: Background enrichment failed for ${conversation._id}: ${err.message}`);
       });
     });
 
-    const responseBody = {
+    res.status(202).json({
       message: 'Conversation received and enrichment started',
       id: conversation._id,
       status: 'PENDING'
-    };
-    console.log(`[CONTROLLER] Sending 202 response: ${JSON.stringify(responseBody)}`);
-    console.log(`[CONTROLLER] ─── createConversation END (success) ───\n`);
-    res.status(202).json(responseBody);
+    });
   } catch (error) {
-    console.error(`[CONTROLLER] ─── createConversation ERROR ───`);
-    console.error(`[CONTROLLER] Error message: ${error.message}`);
-    console.error(`[CONTROLLER] Error name: ${error.name}`);
-    console.error(`[CONTROLLER] Error stack: ${error.stack}`);
-    if (error.errors) {
-      console.error(`[CONTROLLER] Validation errors:`, JSON.stringify(error.errors, null, 2));
-    }
+    logger.error(`DEBUG: [CONTROLLER ERROR] ${error.message}`);
     next(error);
   }
 };
 
 const bulkCreateConversations = async (req, res, next) => {
-  const startTime = Date.now();
   try {
-    console.log(`\n[CONTROLLER] ─── bulkCreateConversations START ───`);
+    logger.info(`DEBUG: [REQUEST RECEIVED] POST /api/conversations/bulk - Count: ${req.body.conversations?.length}`);
     const { conversations } = req.body;
-    console.log(`[CONTROLLER] Bulk payload: ${Array.isArray(conversations) ? conversations.length + ' items' : 'NOT AN ARRAY'}`);
-    
     if (!Array.isArray(conversations)) {
-      console.error(`[CONTROLLER] conversations is not an array: ${typeof conversations}`);
       return res.status(400).json({ message: 'conversations must be an array' });
     }
 
     const results = [];
-    const errors = [];
-    for (let i = 0; i < conversations.length; i++) {
-      const convoData = conversations[i];
-      console.log(`[CONTROLLER] Bulk item ${i + 1}/${conversations.length}: platform="${convoData.platform}", external_id="${convoData.external_id}", title="${(convoData.title || '').substring(0, 40)}"`);
-      try {
-        const convo = await conversationService.createOrUpdate(convoData);
-        console.log(`[CONTROLLER] Bulk item ${i + 1} OK: _id=${convo._id}`);
-        
-        setImmediate(() => {
-          enrichmentService.process(convo._id).catch(err => {
-            console.error(`[CONTROLLER] Bulk enrichment failed for ${convo._id}: ${err.message}`);
-          });
+    for (const convoData of conversations) {
+      const convo = await conversationService.createOrUpdate(convoData);
+      logger.info(`DEBUG: [CONTROLLER] Bulk item processed: ${convo._id}`);
+      
+      // Trigger enrichment immediately
+      setImmediate(() => {
+        logger.info(`DEBUG: [ENRICHMENT TRIGGERED] for ${convo._id}`);
+        enrichmentService.process(convo._id).catch(err => {
+          logger.error(`DEBUG: Background enrichment failed for ${convo._id}: ${err.message}`);
         });
-        results.push(convo._id);
-      } catch (itemError) {
-        console.error(`[CONTROLLER] Bulk item ${i + 1} FAILED: ${itemError.message}`);
-        console.error(`[CONTROLLER] Item error stack: ${itemError.stack}`);
-        errors.push({ index: i, error: itemError.message, platform: convoData.platform });
-      }
+      });
+      results.push(convo._id);
     }
 
-    console.log(`[CONTROLLER] Bulk complete: ${results.length} success, ${errors.length} failed, ${Date.now() - startTime}ms`);
-    console.log(`[CONTROLLER] ─── bulkCreateConversations END ───\n`);
     res.status(202).json({
       message: `Received ${results.length} conversations, enrichment started`,
-      ids: results,
-      errors: errors.length > 0 ? errors : undefined
+      ids: results
     });
   } catch (error) {
-    console.error(`[CONTROLLER] ─── bulkCreateConversations ERROR ───`);
-    console.error(`[CONTROLLER] Error: ${error.message}`);
-    console.error(`[CONTROLLER] Stack: ${error.stack}`);
+    logger.error(`DEBUG: [CONTROLLER ERROR] ${error.message}`);
     next(error);
   }
 };

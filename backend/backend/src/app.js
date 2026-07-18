@@ -13,33 +13,13 @@ const authRoutes         = require('./routes/auth.routes');
 
 const app = express();
 
-// Allow Next.js frontend, localhost, all Chrome extensions, and any deployed
-// frontend origins listed in FRONTEND_URL (comma-separated, e.g. your Vercel URL)
+// Allow Next.js frontend, localhost, Chrome extensions, and deployed frontend origins
 const allowedOrigins = (process.env.FRONTEND_URL || '')
   .split(',')
   .map((o) => o.trim())
-  .map((o) => o.replace(/\/$/, ''))
   .filter(Boolean);
 
-// In the combined Docker deployment, the frontend calls the backend through
-// a same-origin Next.js rewrite (/backend/* -> localhost:8000/*). Next's
-// proxy forwards the original browser Origin header, but rewrites Host to
-// the proxy destination (localhost:8000) — so Origin and Host never match,
-// and the public Railway domain (dynamically assigned, easy to forget to
-// sync into FRONTEND_URL) shows up as a foreign Origin to Express.
-//
-// The reliable signal instead: port 8000 is never exposed publicly by
-// Railway (only the frontend's $PORT is), so any connection that actually
-// reaches it from outside the container is impossible — every request
-// Express sees either came in over loopback (the internal Next.js proxy)
-// or was made directly to this process in local dev. Trust loopback
-// unconditionally; everything else still goes through the origin allowlist.
-function isLoopback(req) {
-  const addr = req.socket.remoteAddress || '';
-  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
-}
-
-app.use((req, res, next) => {
+app.use(
   cors({
     origin: (origin, callback) => {
       if (
@@ -47,8 +27,7 @@ app.use((req, res, next) => {
         origin.startsWith('chrome-extension://') ||
         origin.startsWith('http://localhost') ||
         origin.startsWith('http://127.0.0.1') ||
-        allowedOrigins.includes(origin.replace(/\/$/, '')) ||
-        isLoopback(req)
+        allowedOrigins.includes(origin)
       ) {
         callback(null, true);
       } else {
@@ -56,8 +35,9 @@ app.use((req, res, next) => {
       }
     },
     credentials: true,
-  })(req, res, next);
-});
+  })
+);
+
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 app.use(morgan('dev'));
@@ -65,19 +45,7 @@ app.use(morgan('dev'));
 // Log every incoming request so we can see if extension data arrives
 app.use((req, res, next) => {
   if (req.method === 'POST') {
-    console.log(`\n[REQUEST] ═══════════════════════════════════════════════`);
-    console.log(`[REQUEST] ${req.method} ${req.originalUrl}`);
-    console.log(`[REQUEST] Origin: ${req.headers.origin || 'none'}`);
-    console.log(`[REQUEST] Content-Type: ${req.headers['content-type'] || 'none'}`);
-    console.log(`[REQUEST] X-API-KEY: ${req.headers['x-api-key'] ? 'PRESENT (' + req.headers['x-api-key'].substring(0, 10) + '...)' : 'MISSING'}`);
-    console.log(`[REQUEST] User-Agent: ${(req.headers['user-agent'] || '').substring(0, 80)}`);
-    console.log(`[REQUEST] Body size: ${JSON.stringify(req.body || {}).length} bytes`);
-    console.log(`[REQUEST] Body keys: ${req.body ? Object.keys(req.body).join(', ') : 'EMPTY'}`);
-    if (req.body?.platform) console.log(`[REQUEST] Platform: ${req.body.platform}`);
-    if (req.body?.title) console.log(`[REQUEST] Title: ${(req.body.title || '').substring(0, 60)}`);
-    if (req.body?.messages) console.log(`[REQUEST] Message count: ${(req.body.messages || []).length}`);
-    if (req.body?.conversations) console.log(`[REQUEST] Bulk count: ${(req.body.conversations || []).length}`);
-    console.log(`[REQUEST] ═══════════════════════════════════════════════`);
+    console.log(`[REQUEST] ${req.method} ${req.path} from ${req.headers.origin || 'unknown'}`);
   }
   next();
 });

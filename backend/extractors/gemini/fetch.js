@@ -91,86 +91,32 @@ function removeOverlay() { overlayEl?.remove(); overlayEl = null; }
 
 // ── Scroll conversation to load all messages ───────────────
 function getConversationContainer() {
-  // Strategy 1: walk up from a message element to find scrollable parent
   const anchor = document.querySelector(USER_SEL.join(','));
-  if (anchor) {
-    let el = anchor.parentElement;
-    while (el && el !== document.documentElement) {
-      const s = window.getComputedStyle(el);
-      if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 50)
-        return el;
-      el = el.parentElement;
-    }
-  }
-  // Strategy 2: probe known Gemini virtual-scroll containers
-  for (const sel of ['[class*="scroll-container"]', '[class*="conversation"]', '[role="region"]', 'main', '[class*="content"]']) {
-    const el = document.querySelector(sel);
-    if (!el) continue;
+  if (!anchor) return null;
+  let el = anchor.parentElement;
+  while (el && el !== document.documentElement) {
     const s = window.getComputedStyle(el);
-    if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) return el;
+    if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 50)
+      return el;
+    el = el.parentElement;
   }
-  // Strategy 3: find any scrollable element inside main
-  const main = document.querySelector('main') || document.body;
-  const candidates = [...main.querySelectorAll('*')].filter(el => {
-    const s = window.getComputedStyle(el);
-    return (s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 100;
-  }).sort((a, b) => b.scrollHeight - a.scrollHeight);
-  if (candidates.length) return candidates[0];
   return document.documentElement;
-}
-
-function countVisibleMessages() {
-  let count = 0;
-  for (const sel of USER_SEL) count += document.querySelectorAll(sel).length;
-  for (const sel of ASST_SEL) count += document.querySelectorAll(sel).length;
-  return count;
 }
 
 function scrollToLoadAllMessages() {
   return new Promise((resolve) => {
-    const c   = getConversationContainer();
-    if (!c) { resolve(); return; }
-    const maxPasses = 8;
-    let pass  = 0;
-    let prevCount = countVisibleMessages();
-
-    const safety = setTimeout(resolve, 40_000);
-
-    function doPass() {
-      if (++pass > maxPasses) { clearTimeout(safety); resolve(); return; }
-
-      // Scroll all the way up first (triggers Gemini to load earliest messages)
-      c.scrollTop = 0;
-      setTimeout(() => {
-        // Then scroll down in small steps
-        const step = Math.max(150, Math.floor((c.clientHeight || 600) * 0.4));
-        let pos = 0;
-        const tick = () => {
-          pos += step;
-          c.scrollTop = pos;
-          setTimeout(() => {
-            if (pos < c.scrollHeight) {
-              tick();
-            } else {
-              // Scroll back to top for the next pass
-              c.scrollTop = 0;
-              const newCount = countVisibleMessages();
-              if (newCount > prevCount) {
-                prevCount = newCount;
-                setTimeout(doPass, 600);
-              } else {
-                clearTimeout(safety); resolve();
-              }
-            }
-          }, 350);
-        };
-        setTimeout(tick, 300);
-      }, 400);
-    }
-
-    // Ensure we start at top and do first pass
-    c.scrollTop = 0;
-    setTimeout(doPass, 300);
+    const container = getConversationContainer();
+    if (!container) { resolve(); return; }
+    container.scrollTop = 0;
+    let pos = 0;
+    const step = Math.max(300, Math.floor((container.clientHeight || 600) * 0.75));
+    const tick = () => {
+      pos += step;
+      container.scrollTop = pos;
+      setTimeout(() => { pos < container.scrollHeight ? tick() : resolve(); }, 500);
+    };
+    setTimeout(tick, 400);
+    setTimeout(resolve, 30_000);
   });
 }
 
@@ -273,19 +219,13 @@ function scrapeConversation() {
 // ── Capture pipeline ───────────────────────────────────────
 let isCapturing = false;
 
-async function captureAndSend(scroll = true) {
+async function captureAndSend() {
   if (isCapturing) return { status: 'busy' };
   isCapturing = true;
 
   try {
     await waitForStreamingToFinish();
-    if (scroll) {
-      await scrollToLoadAllMessages();
-    } else {
-      // Auto-capture: gentle single pass so virtual scroll loads at least visible range
-      const c = getConversationContainer();
-      if (c) { c.scrollTop = 0; await new Promise(r => setTimeout(r, 300)); c.scrollTop = c.scrollHeight; await new Promise(r => setTimeout(r, 1000)); }
-    }
+    await scrollToLoadAllMessages();
 
     const conversation = scrapeConversation();
     if (!conversation) return { status: 'empty' };
@@ -307,7 +247,7 @@ async function captureAndSend(scroll = true) {
 let debounceTimer = null;
 const observer = new MutationObserver(() => {
   clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => captureAndSend(false), 3000);
+  debounceTimer = setTimeout(captureAndSend, 3000);
 });
 
 function waitForChatAndObserve() {
@@ -323,7 +263,7 @@ new MutationObserver(() => {
   if (location.href !== lastUrl) {
     lastUrl = location.href;
     console.log('[Brain Shadow] Navigation →', location.href);
-    setTimeout(() => captureAndSend(true), 4000);
+    setTimeout(captureAndSend, 4000);
   }
 }).observe(document, { subtree: true, childList: true });
 
@@ -353,24 +293,23 @@ function extractRecents() {
     threads.push({ url: canonical, title: title.slice(0, 120) });
   }
 
-  // Pass 2 — broad UUID scan (always runs to catch sidebar links regex misses)
-  const regexCount = threads.length;
-  {
-    console.log(`[Brain Shadow] Broad UUID scan...`);
+  // Pass 2 — broad UUID fallback
+  if (threads.length === 0) {
+    console.warn('[Brain Shadow] Regex matched 0 — trying broad UUID scan');
     const SKIP = /\/(login|signup|settings|help|about|privacy|terms|logout|new|upgrade|billing)\b/i;
     for (const link of allLinks) {
       let u; try { u = new URL(link.href); } catch { continue; }
       if (u.origin !== location.origin) continue;
       if (SKIP.test(u.pathname) || u.pathname.length < 4) continue;
-      if (!u.pathname.split('/').filter(Boolean).some(s => /^[a-zA-Z0-9_\-]{6,}$/.test(s))) continue;
+      const segs = u.pathname.split('/').filter(Boolean);
+      if (!segs.some(s => /^[a-zA-Z0-9_\-]{8,}$/.test(s))) continue;
       const canonical = `${u.origin}${u.pathname}`;
       if (seen.has(canonical)) continue;
       seen.add(canonical);
-      const title = link.getAttribute('aria-label')?.trim() || link.querySelector('span,p,div')?.innerText?.trim() || link.innerText?.trim() || `Chat ${threads.length + 1}`;
+      const title = link.getAttribute('aria-label')?.trim() || link.innerText?.trim() || `Chat ${threads.length + 1}`;
       threads.push({ url: canonical, title: title.slice(0, 120) });
     }
-    const broadFound = threads.length - regexCount;
-    if (broadFound > 0) console.log(`[Brain Shadow] Broad scan found ${broadFound} additional`);
+    if (threads.length > 0) console.log(`[Brain Shadow] Broad scan found ${threads.length} — update CONV_URL_RE`);
   }
 
   console.log(`[Brain Shadow] Gemini conversations found: ${threads.length}`);
@@ -395,15 +334,13 @@ async function scrollSidebarToLoadAll() {
   }
 
   if (!sidebar) {
-    const sels = ['nav','aside','[role="navigation"]','[aria-label*="history" i]','[aria-label*="chat" i]','[aria-label*="Recent" i]','[class*="nav"]','[class*="menu"]'];
-    for (const sel of sels) {
-      for (const el of document.querySelectorAll(sel)) {
-        const s = window.getComputedStyle(el);
-        if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) {
-          sidebar = el; break;
-        }
+    for (const sel of ['nav','aside','[role="navigation"]','[aria-label*="history" i]','[aria-label*="chat" i]']) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const s = window.getComputedStyle(el);
+      if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) {
+        sidebar = el; break;
       }
-      if (sidebar) break;
     }
   }
 
@@ -414,7 +351,7 @@ async function scrollSidebarToLoadAll() {
       target.scrollBy(0, target.clientHeight || 500);
       count++;
       const newH = target.scrollHeight;
-      if (newH === lastH || count >= 100) {
+      if (newH === lastH || count >= 80) {
         clearInterval(tick);
         target.scrollTo(0, 0);
         setTimeout(resolve, 400);
@@ -435,7 +372,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.type === 'CAPTURE_CURRENT') {
-    captureAndSend(true)
+    captureAndSend()
       .then(sendResponse)
       .catch(err => sendResponse({ status: 'error', error: err?.message }));
     return true;
