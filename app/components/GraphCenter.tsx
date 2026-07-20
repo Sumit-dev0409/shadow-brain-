@@ -1,12 +1,29 @@
 "use client";
 
-import { useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect, forwardRef, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
 import { MessageSquare, Sparkles, Loader2, X, Clock, Orbit, Crosshair, Lock, LockOpen } from "lucide-react";
-import { ObsidianGraph, type ObsidianGraphHandle, type ZoomLevel } from "./ObsidianGraph";
+import type { ObsidianGraphHandle, ZoomLevel } from "./ObsidianGraph";
 import { ChatSession, Message } from "@/app/types";
 import { searchMemory, MemorySource } from "@/app/lib/api";
 import { AI_AGENTS, PLATFORM_COLORS, PLATFORM_LABELS, PLATFORM_ABBR } from "@/app/lib/agents";
+
+const ObsidianGraphRaw = dynamic(() => import("./ObsidianGraph").then((m) => m.ObsidianGraph), {
+  ssr: false,
+  loading: () => (
+    <div className="flex items-center justify-center w-full h-full" style={{ color: "var(--text-muted)" }}>
+      <Loader2 size={20} className="animate-spin" style={{ marginRight: 8 }} />
+      Loading graph…
+    </div>
+  ),
+});
+
+const ObsidianGraph = forwardRef<ObsidianGraphHandle, React.ComponentProps<typeof ObsidianGraphRaw>>(
+  function ObsidianGraphForwarded(props, ref) {
+    return <ObsidianGraphRaw ref={ref as any} {...props} />;
+  }
+);
 
 interface GraphCenterProps {
   searchKeyword: string;
@@ -221,13 +238,8 @@ function SearchResultsPanel({
   onUnpin,
   onDismiss,
 }: SearchResultsPanelProps) {
-  console.log('[SearchResultsPanel] render', {
-    aiLoading,
-    aiAnswerLength: aiAnswer.length,
-    aiAnswerPreview: aiAnswer.slice(0, 120),
-    aiSourcesLength: aiSources.length,
-    displayedSessionsLength: displayedSessions.length,
-  });
+  const showAiAnswer = true;
+
   return (
     <div className="w-full flex flex-col rounded-xl overflow-hidden" style={{ border: "1px solid var(--border-subtle)", background: "rgba(6,8,18,0.98)" }}>
       {/* Panel header */}
@@ -293,94 +305,95 @@ function SearchResultsPanel({
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto">
-        {/* AI Answer block — always at top when search is active */}
-        <div className="px-4 pt-4 pb-3" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-          <div className="flex items-center gap-1.5 mb-2">
-            <Sparkles size={12} style={{ color: "#8b5cf6" }} />
-            <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8b5cf6" }}>
-              AI Memory Answer
-            </span>
-          </div>
-
-          {aiLoading ? (
-            <div className="flex items-center gap-2 py-2">
-              <Loader2 size={13} className="animate-spin" style={{ color: "var(--text-muted)" }} />
-              <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>Searching memory…</span>
+        {showAiAnswer && (
+          <div className="px-4 pt-4 pb-3" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Sparkles size={12} style={{ color: "#8b5cf6" }} />
+              <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8b5cf6" }}>
+                AI Memory Answer
+              </span>
             </div>
-          ) : aiAnswer ? (
-            <>
-              <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>
-                {aiAnswer}
-              </p>
 
-              {aiSources.length > 0 && (
-                <div className="flex flex-col gap-2 mt-3">
-                  <span className="text-[9px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
-                    Sources ({aiSources.length})
-                  </span>
-                  {aiSources.map((src) => {
-                    const color = src.platform ? PLATFORM_COLORS[src.platform] ?? "#4f8aff" : "#4f8aff";
-                    const label = src.platform ? PLATFORM_LABELS[src.platform] ?? src.platform : "";
-                    return (
-                      <div
-                        key={src.id}
-                        className="rounded-lg px-3 py-2"
-                        style={{
-                          background: `${color}10`,
-                          border: `1px solid ${color}28`,
-                        }}
-                      >
-                        <p className="text-[10px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>
-                          {src.title}
-                        </p>
-                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                          {label && (
-                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded" style={{ background: `${color}20`, color, border: `1px solid ${color}40` }}>
-                              {label}
-                            </span>
+            {aiLoading ? (
+              <div className="flex items-center gap-2 py-2">
+                <Loader2 size={13} className="animate-spin" style={{ color: "var(--text-muted)" }} />
+                <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>Searching memory…</span>
+              </div>
+            ) : aiAnswer ? (
+              <>
+                <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>
+                  {aiAnswer}
+                </p>
+
+                {aiSources.length > 0 && (
+                  <div className="flex flex-col gap-2 mt-3">
+                    <span className="text-[9px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+                      Sources ({aiSources.length})
+                    </span>
+                    {aiSources.map((src) => {
+                      const color = src.platform ? PLATFORM_COLORS[src.platform] ?? "#4f8aff" : "#4f8aff";
+                      const label = src.platform ? PLATFORM_LABELS[src.platform] ?? src.platform : "";
+                      return (
+                        <div
+                          key={src.id}
+                          className="rounded-lg px-3 py-2"
+                          style={{
+                            background: `${color}10`,
+                            border: `1px solid ${color}28`,
+                          }}
+                        >
+                          <p className="text-[10px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>
+                            {src.title}
+                          </p>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            {label && (
+                              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded" style={{ background: `${color}20`, color, border: `1px solid ${color}40` }}>
+                                {label}
+                              </span>
+                            )}
+                            {src.role && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)", color: "var(--text-muted)" }}>
+                                {src.role === "user" ? "You" : "AI"}
+                              </span>
+                            )}
+                            {src.date && (
+                              <span className="flex items-center gap-1 text-[9px]" style={{ color: "var(--text-muted)" }}>
+                                <Clock size={8} />
+                                {src.date}
+                              </span>
+                            )}
+                          </div>
+                          {src.snippet && (
+                            <p className="text-[10px] leading-relaxed mt-1.5 line-clamp-3" style={{ color: "var(--text-secondary)" }}>
+                              {src.snippet}
+                            </p>
                           )}
-                          {src.role && (
-                            <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)", color: "var(--text-muted)" }}>
-                              {src.role === "user" ? "You" : "AI"}
-                            </span>
-                          )}
-                          {src.date && (
-                            <span className="flex items-center gap-1 text-[9px]" style={{ color: "var(--text-muted)" }}>
-                              <Clock size={8} />
-                              {src.date}
-                            </span>
+                          {src.keywords && src.keywords.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1.5">
+                              {src.keywords.slice(0, 5).map((kw) => (
+                                <span
+                                  key={kw}
+                                  className="text-[9px] px-1.5 py-0.5 rounded-full"
+                                  style={{ background: `${color}15`, color: "var(--text-muted)", border: `1px solid ${color}20` }}
+                                >
+                                  {kw}
+                                </span>
+                              ))}
+                            </div>
                           )}
                         </div>
-                        {src.snippet && (
-                          <p className="text-[10px] leading-relaxed mt-1.5 line-clamp-3" style={{ color: "var(--text-secondary)" }}>
-                            {src.snippet}
-                          </p>
-                        )}
-                        {src.keywords && src.keywords.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1.5">
-                            {src.keywords.slice(0, 5).map((kw) => (
-                              <span
-                                key={kw}
-                                className="text-[9px] px-1.5 py-0.5 rounded-full"
-                                style={{ background: `${color}15`, color: "var(--text-muted)", border: `1px solid ${color}20` }}
-                              >
-                                {kw}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </>
-          ) : (
-            <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-              No memory answer yet — type to search.
-            </p>
-          )}
-        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+                No memory answer yet — type to search.
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="p-4">
           {displayedSessions.length === 0 ? (
@@ -649,20 +662,9 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
     let cancelled = false;
 
     const runSearch = async () => {
-      console.log('[GraphCenter] search start', {
-        searchKeyword: searchKeyword.trim(),
-        selectedAgents,
-        searchTriggerKey,
-      });
       try {
         const result = await searchMemory(searchKeyword.trim(), selectedAgents);
-        console.log('[GraphCenter] search response', result);
         if (cancelled) return;
-        console.log('[GraphCenter] setting aiAnswer', {
-          answerLength: result.answer.length,
-          answerPreview: result.answer.slice(0, 120),
-          sourcesLength: result.sources.length,
-        });
         setAiAnswer(result.answer);
         setAiSources(result.sources);
         onAiSourcesChange?.(result.sources);
@@ -693,7 +695,6 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
     const found = nodeSessionsMapRef.current.get(nodeId) ?? [];
     setClickedSessions(found);
     setPinnedNodeId(nodeId);
-    setPanelDismissed(false);
     if (found.length > 0) {
       setSelectedConversation(found[0]);
       setConversationPopupOpen(true);
@@ -726,8 +727,8 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
     [aiSources, aiSourceIds, sessions, matchingSessions]
   );
 
-  // What to show: pinned node sessions, LLM-filtered sessions, or keyword fallback
-  const displayedSessions = pinnedNodeId !== null ? clickedSessions : aiMatchedSessions;
+  // What to show in the right panel: keep the last search results even after a node click
+  const displayedSessions = aiMatchedSessions;
 
   const handleDismissPanel = useCallback(() => setPanelDismissed(true), []);
 
@@ -894,6 +895,7 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
           ref={graphRef}
           searchKeyword={searchKeyword}
           highlightedNodes={highlightedNodes}
+          nodeDates={isConversationPopupOpen ? new Map() : nodeDates}
           onNodeClick={handleNodeClick}
           locked={locked}
           onZoomLevelChange={setZoomLevel}
@@ -987,7 +989,7 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ duration: 0.25 }}
-                className="relative w-full h-full max-w-5xl max-h-[88vh] rounded-2xl overflow-hidden"
+                className="relative w-full h-full max-w-5xl max-h-[88vh] rounded-2xl overflow-hidden flex flex-col"
                 style={{
                   background: "rgba(7,9,15,0.96)",
                   border: "1px solid var(--border-subtle)",
@@ -1016,9 +1018,6 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
                           {PLATFORM_LABELS[selectedConversation.platform]}
                         </span>
                       )}
-                      <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-                        {fmtDate(selectedConversation.createdAt)}
-                      </span>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -1056,257 +1055,65 @@ export function GraphCenter({ searchKeyword, searchTriggerKey = 0, onAiSourcesCh
                 </div>
 
                 {/* Scrollable content */}
-                <div className="flex-1 overflow-y-auto">
-
-                  {/* AI Answer block — always at top when search is active */}
-                  <div
-                    className="px-4 pt-4 pb-3"
-                    style={{ borderBottom: "1px solid var(--border-subtle)" }}
-                  >
-                    <div className="flex items-center gap-1.5 mb-2">
-                      <Sparkles size={12} style={{ color: "#8b5cf6" }} />
-                      <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8b5cf6" }}>
-                        AI Memory Answer
-                      </span>
-                    </div>
-
-                    {aiLoading ? (
-                      <div className="flex items-center gap-2 py-2">
-                        <Loader2 size={13} className="animate-spin" style={{ color: "var(--text-muted)" }} />
-                        <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>Searching memory…</span>
-                      </div>
-                    ) : aiAnswer ? (
-                      <>
-                        <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>
-                          {aiAnswer}
+                <div className="flex-1 overflow-y-auto min-h-0">
+                  <div className="p-4">
+                    {selectedConversation.messages.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-8 gap-3">
+                        <MessageSquare size={32} style={{ color: "var(--text-muted)", opacity: 0.25 }} />
+                        <p className="text-[13px] font-medium" style={{ color: "var(--text-muted)" }}>
+                          No messages recorded for this conversation
                         </p>
-
-                        {/* Source cards — platform, date, summary */}
-                        {aiSources.length > 0 && (
-                          <div className="flex flex-col gap-2 mt-3">
-                            <span className="text-[9px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
-                              Sources ({aiSources.length})
-                            </span>
-                            {aiSources.map((src) => {
-                              const color = src.platform ? PLATFORM_COLORS[src.platform] ?? "#4f8aff" : "#4f8aff";
-                              const label = src.platform ? PLATFORM_LABELS[src.platform] ?? src.platform : "";
-                              return (
-                                <div
-                                  key={src.id}
-                                  className="rounded-lg px-3 py-2"
-                                  style={{
-                                    background: `${color}10`,
-                                    border: `1px solid ${color}28`,
-                                  }}
-                                >
-                                  <p className="text-[10px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>
-                                    {src.title}
-                                  </p>
-                                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                    {label && (
-                                      <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded" style={{ background: `${color}20`, color, border: `1px solid ${color}40` }}>
-                                        {label}
-                                      </span>
-                                    )}
-                                  </div>
-                                  {(src.summary || src.snippet) && (
-                                    <p className="text-[10px] leading-relaxed mt-1.5 line-clamp-3" style={{ color: "var(--text-secondary)" }}>
-                                      {src.summary || src.snippet}
-                                    </p>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </>
+                      </div>
+                    ) : !selectedConversation.messages.some((m) => (m.content || "").trim().length > 0) ? (
+                      <div className="px-4 py-6 text-center">
+                        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                          {selectedConversation.messages.length} message{selectedConversation.messages.length !== 1 ? "s" : ""} — content not captured
+                        </p>
+                        <p className="text-[10px]" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
+                          The original conversation was indexed, but full text was not stored.
+                        </p>
+                      </div>
                     ) : (
-                      <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-                        No memory answer yet — type to search.
-                      </p>
+                      <div className="flex flex-col gap-3">
+                        {selectedConversation.messages.map((msg: Message) => {
+                          const content = (msg.content || "").trim();
+                          const isUser = msg.role === "user";
+                          const platformColor = selectedConversation.platform ? PLATFORM_COLORS[selectedConversation.platform] ?? "#4f8aff" : "#4f8aff";
+                          return (
+                            <div key={msg.id} className="flex gap-2" style={{ flexDirection: isUser ? "row-reverse" : "row" }}>
+                              <div
+                                className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-[8px] font-bold"
+                                style={{
+                                  background: isUser ? "linear-gradient(135deg,#4f8aff,#8b5cf6)" : platformColor,
+                                  color: "#fff",
+                                  marginTop: 2,
+                                  boxShadow: isUser ? "0 0 8px rgba(79,138,255,0.3)" : "none",
+                                }}
+                              >
+                                {isUser ? "U" : (selectedConversation.platform ? PLATFORM_ABBR[selectedConversation.platform] ?? "AI" : "AI")}
+                              </div>
+                              <div
+                                className="rounded-xl px-3 py-2 min-w-0"
+                                style={{
+                                  maxWidth: "calc(100% - 32px)",
+                                  background: isUser ? "rgba(79,138,255,0.12)" : "rgba(255,255,255,0.04)",
+                                  border: `1px solid ${isUser ? "rgba(79,138,255,0.2)" : "var(--border-subtle)"}`,
+                                  boxShadow: "none",
+                                }}
+                              >
+                                <div className="max-h-[240px] overflow-y-auto scrollable-area">
+                                  <p className="text-[12px] leading-relaxed" style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                    {content}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
-
-                  {/* Session cards */}
-                  <div className="p-4">
-                  {displayedSessions.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-8 gap-3">
-                      <MessageSquare size={32} style={{ color: "var(--text-muted)", opacity: 0.25 }} />
-                      <p className="text-[13px] font-medium" style={{ color: "var(--text-muted)" }}>
-                        No conversations for this node
-                      </p>
-                      <p className="text-[11px]" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
-                        Try clicking a brighter highlighted node.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-5">
-                      {displayedSessions.map((session, sIdx) => {
-                        const hasAnyContent = session.messages.some(m => (m.content || "").trim().length > 0);
-                        const platformColor = session.platform ? PLATFORM_COLORS[session.platform] ?? "#4f8aff" : "#4f8aff";
-                        return (
-                        <motion.div
-                          key={session.id}
-                          initial={{ opacity: 0, y: 12 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: sIdx * 0.05 }}
-                          className="rounded-xl overflow-hidden"
-                          style={{
-                            background: "rgba(15,20,40,0.8)",
-                            border: "1px solid var(--border-subtle)",
-                          }}
-                        >
-                          {/* Session header — always shown when multiple sessions visible */}
-                          {displayedSessions.length > 1 && (
-                            <div
-                              className="flex items-center justify-between px-3 py-2.5"
-                              style={{ background: "rgba(79,138,255,0.06)", borderBottom: "1px solid var(--border-subtle)" }}
-                            >
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span
-                                  className="w-2 h-2 rounded-full flex-shrink-0"
-                                  style={{ background: platformColor }}
-                                />
-                                <p className="text-[12px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>
-                                  {session.title}
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-1 flex-shrink-0 ml-2">
-                                {session.platform && PLATFORM_LABELS[session.platform] && (
-                                  <span
-                                    className="text-[9px] font-semibold px-1.5 py-0.5 rounded"
-                                    style={{
-                                      background: `${platformColor}18`,
-                                      color: platformColor,
-                                      border: `1px solid ${platformColor}33`,
-                                    }}
-                                  >
-                                    {PLATFORM_LABELS[session.platform]}
-                                  </span>
-                                )}
-                                <div className="flex items-center gap-1 ml-1">
-                                  <Clock size={9} style={{ color: "var(--text-muted)" }} />
-                                  <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>
-                                    {fmtDate(session.createdAt)}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Enrichment metadata — always show if available */}
-                          {(session.summary || session.topic || (session.keywords && session.keywords.length > 0)) && (
-                            <div
-                              className="px-3 py-2.5"
-                              style={{ background: `${platformColor}08`, borderBottom: "1px solid var(--border-subtle)" }}
-                            >
-                              {session.topic && (
-                                <p className="text-[10px] font-semibold mb-1" style={{ color: platformColor }}>
-                                  {session.topic}
-                                </p>
-                              )}
-                              {session.summary && (
-                                <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-                                  {session.summary}
-                                </p>
-                              )}
-                              {session.keywords && session.keywords.length > 0 && (
-                                <div className="flex flex-wrap gap-1 mt-1.5">
-                                  {session.keywords.slice(0, 6).map((kw) => (
-                                    <span
-                                      key={kw}
-                                      className="text-[9px] px-1.5 py-0.5 rounded-full"
-                                      style={{
-                                        background: `${platformColor}18`,
-                                        color: "var(--text-secondary)",
-                                        border: `1px solid ${platformColor}22`,
-                                      }}
-                                    >
-                                      {kw}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Messages */}
-                          {session.messages.length === 0 ? (
-                            <div className="px-4 py-6 text-center">
-                              <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>No messages recorded.</p>
-                            </div>
-                          ) : !hasAnyContent ? (
-                            <div className="px-4 py-5 text-center">
-                              <p className="text-[11px] mb-1" style={{ color: "var(--text-muted)" }}>
-                                {session.messages.length} message{session.messages.length !== 1 ? "s" : ""} — content not captured
-                              </p>
-                              <p className="text-[10px]" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
-                                The conversation was indexed for search but full text was not stored.
-                              </p>
-                            </div>
-                          ) : (
-                            <div className="flex flex-col gap-3 p-3">
-                              {session.messages.filter((msg: Message) => {
-                                const content = (msg.content || "").trim();
-                                return content && content.toLowerCase().includes(kw);
-                              }).map((msg: Message) => {
-                                const content = (msg.content || "").trim();
-                                const isUser = msg.role === "user";
-                                return (
-                                  <div
-                                    key={msg.id}
-                                    className="flex gap-2"
-                                    style={{ flexDirection: isUser ? "row-reverse" : "row" }}
-                                  >
-                                    {/* Avatar */}
-                                    <div
-                                      className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-[8px] font-bold"
-                                      style={{
-                                        background: isUser
-                                          ? "linear-gradient(135deg,#4f8aff,#8b5cf6)"
-                                          : platformColor,
-                                        color: "#fff",
-                                        marginTop: 2,
-                                        boxShadow: isUser ? "0 0 8px rgba(79,138,255,0.3)" : "none",
-                                      }}
-                                    >
-                                      {isUser ? "U" : (session.platform ? PLATFORM_ABBR[session.platform] ?? "AI" : "AI")}
-                                    </div>
-
-                                    {/* Bubble */}
-                                    <div
-                                      className="rounded-xl px-3 py-2 min-w-0"
-                                      style={{
-                                        maxWidth: "calc(100% - 32px)",
-                                        background: isUser ? "rgba(79,138,255,0.12)" : "rgba(255,255,255,0.04)",
-                                        border: `1px solid ${isUser ? "rgba(79,138,255,0.2)" : "var(--border-subtle)"}`,
-                                        boxShadow: "none",
-                                      }}
-                                    >
-                                      <div style={{ maxHeight: "200px", overflowY: "auto" }}>
-                                        <p
-                                          className="text-[12px] leading-relaxed"
-                                          style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-                                        >
-                                          {content}
-                                        </p>
-                                      </div>
-                                      <p className="text-[9px] mt-1" style={{ color: "var(--text-muted)", textAlign: isUser ? "right" : "left" }}>
-                                        {fmtTime(msg.timestamp)}
-                                      </p>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </motion.div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  </div>{/* end p-4 session cards wrapper */}
-                </div>{/* end scrollable content */}
+                </div>
               </motion.div>
             </motion.div>
           )}
