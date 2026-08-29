@@ -2,6 +2,11 @@ const { OAuth2Client } = require('google-auth-library');
 const jwt = require('jsonwebtoken');
 const User = require('../models/user.model');
 const logger = require('../utils/logger');
+const {
+  DEMO_USER,
+  generateDemoToken,
+  demoAuthCheck,
+} = require('../middleware/demo-auth.middleware');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 if (!GOOGLE_CLIENT_ID) {
@@ -89,6 +94,15 @@ const googleLogin = async (req, res, next) => {
 };
 
 const me = async (req, res) => {
+  const demoAuthResult = demoAuthCheck(req);
+  if (demoAuthResult) {
+    return res.json({
+      email: demoAuthResult.user.email,
+      name: demoAuthResult.user.name,
+      avatar: undefined,
+    });
+  }
+
   const token = req.cookies?.[SESSION_COOKIE] || req.header('Authorization')?.split(' ')[1];
   if (!token) return res.status(401).json({ message: 'Not signed in' });
 
