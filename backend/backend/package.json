@@ -7,7 +7,7 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest",
     "start": "node src/server.js",
     "dev": "node --watch src/server.js"
   },
@@ -27,5 +27,10 @@
     "openai": "^6.44.0",
     "uuid": "^14.0.0",
     "winston": "^3.19.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "jest": "^30.5.0",
+    "supertest": "^7.2.2"
   }
 }

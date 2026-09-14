@@ -14,6 +14,7 @@ declare global {
           initialize: (config: {
             client_id: string;
             callback: (response: GoogleCredentialResponse) => void;
+            use_fedcm_for_prompt?: boolean;
           }) => void;
           renderButton: (
             parent: HTMLElement,
@@ -46,6 +47,7 @@ export function GoogleSignInButton({ onCredential }: GoogleSignInButtonProps) {
       window.google.accounts.id.initialize({
         client_id: clientId!,
         callback: (response) => onCredential(response.credential),
+        use_fedcm_for_prompt: false,
       });
       containerRef.current.innerHTML = "";
       window.google.accounts.id.renderButton(containerRef.current, {

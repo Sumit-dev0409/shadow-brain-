@@ -1,0 +1,26 @@
+# Brain Shadow — System Requirements
+# This is a Node.js project. No Python dependencies.
+# Run `npm install` (root) and `cd backend/backend && npm install` to install JS dependencies.
+
+# ── Runtime ──────────────────────────────────────────────
+Node.js >= 20.19.0
+npm (bundled with Node.js)
+MongoDB >= 7.0 (local or Atlas)
+
+# ── Environment variables (see .env.example files) ───────
+MONGODB_URI              # MongoDB connection string
+PORT=8000                # Backend server port (default)
+GOOGLE_CLIENT_ID         # Google OAuth client ID for sign-in
+JWT_SECRET               # Secret for signing JWT tokens
+BACKEND_API_KEY          # API key for extension auth (static fallback)
+GROQ_API_KEY             # Groq API key (AI enrichment/search)
+CEREBRAS_API_KEY         # Cerebras API key (AI enrichment fallback)
+
+# ── Optional ────────────────────────────────────────────
+OPENROUTER_API_KEY       # OpenRouter key (standalone enrichment processor)
+GROQ_API_KEY_SUMMARY     # Separate Groq key for enrichment (quota doubling)
+GROQ_API_KEY_CHAT        # Separate Groq key for search/chat (quota doubling)
+
+# ── Chrome Extensions (browser-side, no server deps) ────
+# Extensions in backend/extractors/ capture conversations from:
+# ChatGPT, Claude, Gemini, DeepSeek, Blackbox, Copilot, Perplexity, Grok

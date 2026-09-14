@@ -14,6 +14,7 @@ const STORAGE_KEY = 'brain_shadow_conversations';
 const META_KEY = 'brain_shadow_meta';
 const BACKEND_URL_KEY = 'brain_shadow_backend_url';
 const BACKEND_KEY_KEY = 'brain_shadow_api_key'; // Custom key for backend auth
+const JWT_KEY = 'brain_shadow_jwt_token';
 const DEFAULT_BACKEND = 'http://localhost:8000';
 const DEFAULT_API_KEY = 'brain-shadow-secret-key-123';
 
@@ -84,16 +85,23 @@ async function updateMeta(conversations) {
 
 // ── Sync to Automated Backend ─────────────────────────────
 async function syncToBackend(data, source = 'realtime', attempt = 1) {
-  const result = await chrome.storage.local.get([BACKEND_URL_KEY, BACKEND_KEY_KEY]);
+  const result = await chrome.storage.local.get([BACKEND_URL_KEY, JWT_KEY]);
   const backendUrl = result[BACKEND_URL_KEY] || DEFAULT_BACKEND;
-  const apiKey = result[BACKEND_KEY_KEY] || DEFAULT_API_KEY;
+  const token = result[JWT_KEY];
 
-  const endpoint = source === 'bulk' ? '/api/conversations/bulk' : '/api/conversations';
-  const url = `${backendUrl}${endpoint}`;
+  if (!token) {
+    const errMsg = 'No authentication token found. Please log in to Brain Shadow first.';
+    console.error(`[Brain Shadow] ${errMsg}`);
+    throw new Error(errMsg);
+  }
+
+  // Extensions POST conversations to import endpoints
+  const endpoint = source === 'bulk' ? '/api/import/bulk' : '/api/import/capture';
+  const url = `${backendUrl.replace(/\/$/, '')}${endpoint}`;
   const body = source === 'bulk' ? { conversations: [data] } : data;
 
   console.log(`[Brain Shadow DEBUG] Attempt ${attempt}: Syncing to: ${url}`);
-  console.log(`[Brain Shadow DEBUG] API Key: ${apiKey ? 'PRESENT' : 'MISSING'}`);
+  console.log(`[Brain Shadow DEBUG] JWT Token: ${token ? 'PRESENT (starts with: ' + token.substring(0, 10) + '...)' : 'MISSING'}`);
   console.log(`[Brain Shadow DEBUG] Payload Title: ${data.title}, Messages: ${data.messages?.length}`);
 
   try {
@@ -101,7 +109,7 @@ async function syncToBackend(data, source = 'realtime', attempt = 1) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-KEY': apiKey
+        'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify(body)
     });
@@ -153,6 +161,22 @@ async function clearAllData() {
 
 // ── Message handler ────────────────────────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+  // Handle Token pairing from Web bridge
+  if (message.type === 'SET_JWT') {
+    chrome.storage.local.set({ [JWT_KEY]: message.token }).then(() => {
+      console.log(`[Brain Shadow] JWT token successfully set to: ${message.token ? 'PRESENT' : 'NULL (logged out)'}`);
+      sendResponse({ status: 'saved' });
+    });
+    return true;
+  }
+
+  if (message.type === 'GET_JWT') {
+    chrome.storage.local.get(JWT_KEY).then(result => {
+      sendResponse({ token: result[JWT_KEY] || null });
+    });
+    return true;
+  }
 
   // ✅ FIX: Realtime capture from content script (always overwrite)
   if (message.type === 'SAVE_CONVERSATION' || message.type === 'CONVERSATION_CAPTURED') {

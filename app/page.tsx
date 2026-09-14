@@ -82,6 +82,7 @@ export default function Home() {
   const [isMemorySearchLoading, setIsMemorySearchLoading] = useState(false);
   const [resultsPanelContent, setResultsPanelContent] = useState<ReactNode>(null);
   const [showExtensionPrompt, setShowExtensionPrompt] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
 
   // Track which session IDs have already been saved to backend
   const persistedIds = useRef<Set<string>>(new Set());
@@ -126,11 +127,42 @@ export default function Home() {
       userEmail: email,
       selectedAgents: agents,
     });
+
+    if (typeof window !== "undefined") {
+      const storedToken = window.localStorage.getItem("shadowbrain_token");
+
+      // ── STEP 3: Log before postMessage + div render ──
+      console.log(`[JWT-STEP-3] ═══ page.tsx handleAuthenticated ═══`);
+      console.log(`[JWT-STEP-3]   email: ${email}`);
+      console.log(`[JWT-STEP-3]   localStorage token: ${storedToken ? 'PRESENT' : 'MISSING'}`);
+      console.log(`[JWT-STEP-3]   token length: ${storedToken?.length ?? 0}`);
+      console.log(`[JWT-STEP-3]   token preview: ${storedToken ? storedToken.slice(0, 40) + '...' : 'N/A'}`);
+
+      setToken(storedToken);
+      if (storedToken) {
+        console.log(`[JWT-STEP-3] ✅ PASS — Sending SHADOWBRAIN_LOGIN postMessage`);
+        console.log(`[JWT-STEP-3]   targetOrigin: "*"`);
+        console.log(`[JWT-STEP-3]   token preview: ${storedToken.slice(0, 40)}...`);
+        window.postMessage({ type: "SHADOWBRAIN_LOGIN", token: storedToken }, "*");
+        console.log(`[JWT-STEP-3]   postMessage dispatched`);
+        console.log(`[JWT-STEP-3]   Note: #shadowbrain-auth-bridge div will render after React re-render (token state is now set)`);
+      } else {
+        console.log(`[JWT-STEP-3] No extension token available for this local session`);
+      }
+    }
+
     if (!hasSeenExtensionPrompt(email)) {
       markExtensionPromptSeen(email);
       setShowExtensionPrompt(true);
     }
   }, []);
+
+  // Hook to pull local storage token on stage changes
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setToken(window.localStorage.getItem("shadowbrain_token"));
+    }
+  }, [stage]);
 
   const handleAgentsSelected = useCallback((agents: string[]) => {
     setSelectedAgents(agents);
@@ -140,7 +172,11 @@ export default function Home() {
   const handleLogout = useCallback(() => {
     clearSession();
     clearSelectedAgents();
+    setToken(null);
     setAuth({ stage: "auth", userEmail: null, selectedAgents: [] });
+    if (typeof window !== "undefined") {
+      window.postMessage({ type: "SHADOWBRAIN_LOGOUT" }, "*");
+    }
   }, []);
 
   const handleNewChat = useCallback(() => {
@@ -410,6 +446,13 @@ export default function Home() {
         </motion.div>
       </AnimatePresence>
       <ExtensionInstallModal open={showExtensionPrompt} onClose={() => setShowExtensionPrompt(false)} />
+      {token && (
+        <div
+          id="shadowbrain-auth-bridge"
+          data-token={token}
+          style={{ display: "none" }}
+        />
+      )}
     </>
   );
 }

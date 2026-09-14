@@ -491,35 +491,104 @@ function scrapeConversation() {
     if (location.href !== lastUrl) { lastUrl = location.href; setTimeout(captureAndSend, 4000); }
   }).observe(document, { subtree: true, childList: true });
 
-  // ── Sidebar: get conversation list ───────────────────────
-  function extractRecents() {
+  // ══════════════════════════════════════════════════════════
+  // PHASE 1 — DISCOVER ALL CHATS
+  //
+  // The sidebar is virtualized on every supported platform: only a window
+  // of ~20-30 conversation rows exists in the DOM at any instant. The old
+  // approach (scroll to bottom ONCE, then read the DOM once) could only
+  // ever see that final window — hence "29-30 chats" regardless of account
+  // size. The flow below instead walks the whole list incrementally,
+  // merging every rendered row into a persistent Map keyed by a stable
+  // identifier, and only finishes when real end-of-list signals fire.
+  // ══════════════════════════════════════════════════════════
+
+  function linkTitle(link, fallbackIndex) {
+    return (
+      link.getAttribute('aria-label')?.trim() ||
+      link.getAttribute('title')?.trim() ||
+      link.querySelector('span,p,div,h1,h2,h3')?.innerText?.trim() ||
+      link.innerText?.trim() ||
+      `Chat ${fallbackIndex}`
+    ).slice(0, 120);
+  }
+
+  // Stable identifier priority: conversation id → canonical URL. The key is
+  // what dedupes rows across hundreds of scroll cycles, so the same chat
+  // re-rendered many times is counted exactly once.
+  function stableKeyFor(href) {
+    try {
+      if (config.extractId) {
+        const id = config.extractId(href);
+        if (id && id !== href) return `${config.platform}:${id}`;
+      }
+      const u = new URL(href);
+      return `${u.origin}${u.pathname}`;
+    } catch {
+      return href;
+    }
+  }
+
+  // DeepSeek keeps its session list in localStorage rather than (only) in
+  // sidebar anchors — scan it once per discovery run and merge the result
+  // into every harvest cycle.
+  let deepseekLocalCache = null;
+  function deepseekLocalChats(force = false) {
+    if (!force && deepseekLocalCache) return deepseekLocalCache;
+    const out = [];
+    if (host !== 'chat.deepseek.com') { deepseekLocalCache = out; return out; }
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        let raw; try { raw = JSON.parse(localStorage.getItem(key)); } catch { continue; }
+        const data = raw?.state ?? raw;
+        const candidates = typeof data === 'object' && data !== null ? Object.values(data) : [data];
+        for (const val of candidates) {
+          if (!Array.isArray(val)) continue;
+          for (const item of val) {
+            if (typeof item !== 'object' || !item) continue;
+            const id    = item.id || item.sessionId || item.chatId;
+            const title = item.title || item.name || 'DeepSeek chat';
+            if (!id || !/^[a-zA-Z0-9_\-]{8,}$/.test(id)) continue;
+            out.push({ key: `deepseek:${id}`, id: String(id), url: `${location.origin}/chat/s/${id}`, title: String(title).slice(0, 120), platform: 'deepseek' });
+          }
+        }
+      }
+      if (out.length) console.log(`[Brain Shadow][DISCOVERY] DeepSeek localStorage: ${out.length} sessions`);
+    } catch {}
+    deepseekLocalCache = out;
+    return out;
+  }
+
+  // Collect EVERY conversation currently rendered in the sidebar DOM.
+  // Pure read — no scrolling, no side effects. Called once per engine cycle;
+  // dedup happens in the engine's persistent Map, not here.
+  function collectVisibleChats() {
     const allLinks = Array.from(document.querySelectorAll('a[href]'));
-    console.log(`[Brain Shadow] ${config.platform} <a> tags: ${allLinks.length}`);
-    console.log('[Brain Shadow] ALL hrefs:\n' + [...new Set(allLinks.map(a => a.getAttribute('href')))].slice(0, 50).join('\n'));
+    const threads = [];
+    const seenUrls = new Set();
+    let n = 0;
 
-    const seen = new Set(), threads = [];
+    const push = (key, id, url, title) => {
+      n++;
+      if (seenUrls.has(key)) return;
+      seenUrls.add(key);
+      threads.push({ key, ...(id ? { id } : {}), url, title, platform: config.platform });
+    };
 
-    // Pass 1 — platform-specific regex
+    // Pass 1 — platform-specific regex (highest-confidence matches)
     for (const link of allLinks) {
       const href = link.href || '';
       if (config.convUrlRe && !config.convUrlRe.test(href)) continue;
       const capturedId = config.convUrlRe?.exec(href)?.[1];
       if (capturedId && NON_CONVERSATION_IDS.test(capturedId)) continue;
       let canonical; try { const u = new URL(href); canonical = `${u.origin}${u.pathname}`; } catch { continue; }
-      if (seen.has(canonical)) continue; seen.add(canonical);
-      const title = link.getAttribute('aria-label')?.trim() || link.getAttribute('title')?.trim() ||
-        link.querySelector('span,p,div,h1,h2,h3')?.innerText?.trim() || link.innerText?.trim() ||
-        `Chat ${threads.length + 1}`;
-      threads.push({ url: canonical, title: title.slice(0, 120) });
+      push(stableKeyFor(canonical), capturedId, canonical, linkTitle(link, threads.length + 1));
     }
 
-    // Pass 2 — broad UUID fallback. Previously this only ran when Pass 1
-    // found literally nothing, but a platform whose sidebar links don't all
-    // match convUrlRe (or whose regex is slightly off) would silently miss
-    // conversations Pass 1 didn't catch, without ever trying the broader
-    // heuristic. Always run it and merge in anything new.
+    // Pass 2 — broad UUID fallback merged in (platforms whose sidebar links
+    // don't all match convUrlRe).
     {
-      const before = threads.length;
       const SKIP = new RegExp(`\\/${NON_CONVERSATION_IDS.source.slice(1, -1)}\\b`, 'i');
       for (const link of allLinks) {
         let u; try { u = new URL(link.href); } catch { continue; }
@@ -527,76 +596,287 @@ function scrapeConversation() {
         if (SKIP.test(u.pathname) || u.pathname.length < 4) continue;
         if (!u.pathname.split('/').filter(Boolean).some(s => /^[a-zA-Z0-9_\-]{8,}$/.test(s))) continue;
         const canonical = `${u.origin}${u.pathname}`;
-        if (seen.has(canonical)) continue; seen.add(canonical);
-        const title = link.getAttribute('aria-label')?.trim() || link.innerText?.trim() || `Chat ${threads.length + 1}`;
-        threads.push({ url: canonical, title: title.slice(0, 120) });
+        push(`${canonical}`, null, canonical, linkTitle(link, threads.length + 1));
       }
-      if (threads.length > before) console.log(`[Brain Shadow] Broad scan added ${threads.length - before} more (${before} from regex pass)`);
     }
 
-    // DeepSeek: also try localStorage
-    if (threads.length === 0 && host === 'chat.deepseek.com') {
-      try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          let raw; try { raw = JSON.parse(localStorage.getItem(key)); } catch { continue; }
-          const data = raw?.state ?? raw;
-          const candidates = typeof data === 'object' && data !== null ? Object.values(data) : [data];
-          for (const val of candidates) {
-            if (!Array.isArray(val)) continue;
-            for (const item of val) {
-              if (typeof item !== 'object' || !item) continue;
-              const id    = item.id || item.sessionId || item.chatId;
-              const title = item.title || item.name || `DeepSeek chat`;
-              if (!id || !/^[a-zA-Z0-9_\-]{8,}$/.test(id)) continue;
-              if (!seen.has(id)) { seen.add(id); threads.push({ url: `${location.origin}/chat/s/${id}`, title: String(title).slice(0, 120) }); }
-            }
-          }
-        }
-        if (threads.length > 0) console.log(`[Brain Shadow] DeepSeek localStorage: ${threads.length}`);
-      } catch {}
-    }
+    // DeepSeek localStorage sessions merge into every cycle.
+    for (const c of deepseekLocalChats()) push(c.key, c.id, c.url, c.title);
 
-    console.log(`[Brain Shadow] ${config.platform} conversations: ${threads.length}`);
     return threads;
   }
 
-  async function scrollSidebarToLoadAll() {
-    await new Promise(r => setTimeout(r, 1500));
-    let sidebar = null;
-    const firstLink = [...document.querySelectorAll('a[href]')].find(a => config.convUrlRe?.test(a.href));
-    if (firstLink) {
-      let el = firstLink.parentElement;
-      while (el && el !== document.documentElement) {
-        const s = window.getComputedStyle(el);
-        if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) { sidebar = el; break; }
-        el = el.parentElement;
-      }
+  function isScrollableEl(el) {
+    const s = window.getComputedStyle(el);
+    return s.overflowY === 'auto' || s.overflowY === 'scroll';
+  }
+
+  // Rank ALL plausible sidebar scrollers by how many conversation anchors
+  // each contains — resilient to markup redesigns on any platform. The
+  // engine drives the top-ranked candidate and rotates down this list
+  // whenever one proves inert, so a single mis-scored wrapper can no
+  // longer strand discovery at the first preloaded window (~30/59).
+  function findSidebarCandidates() {
+    const anchors = [...document.querySelectorAll('a[href]')].filter(a => config.convUrlRe?.test(a.href));
+    const pool = new Set();
+    for (const a of anchors.slice(0, 40)) {
+      let e = a.parentElement;
+      while (e && e !== document.documentElement) { pool.add(e); e = e.parentElement; }
     }
-    if (!sidebar) {
-      for (const sel of ['nav','aside','[role="navigation"]','[class*="sidebar"]','[class*="Sidebar"]','[class*="history"]','[class*="chatList"]']) {
-        const el = document.querySelector(sel);
-        if (!el) continue;
-        const s = window.getComputedStyle(el);
-        if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) { sidebar = el; break; }
-      }
+    for (const sel of ['nav', 'aside', '[role="navigation"]', '[class*="sidebar" i]', '[class*="history" i]', '[class*="chatList" i]', '[class*="nav-list" i]']) {
+      try { document.querySelectorAll(sel).forEach(e => pool.add(e)); } catch {}
     }
-    const target = sidebar || document.documentElement;
+    const scored = [];
+    for (const el of pool) {
+      if (!el.isConnected) continue;
+      if (!(el.scrollHeight > el.clientHeight + 20)) continue;
+      let count = 0;
+      for (const a of anchors) if (el.contains(a)) count++;
+      if (count <= 0) continue;
+      // Anchor count dominates; real overflow styling breaks ties.
+      scored.push({ el, score: count * (isScrollableEl(el) ? 100 : 1) });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const out = [];
+    for (const s of scored) {
+      if (!out.includes(s.el)) out.push(s.el);
+      if (out.length >= 4) break;
+    }
+    if (out.length) return out;
+    const de = document.documentElement;
+    if (de.scrollHeight > de.clientHeight + 20) return [de];
+    // Short list / no scrollbar yet — still hand back something so the
+    // engine can poll for hydration and "load more" controls.
+    return [document.body];
+  }
+
+  // Resolve once page rendering has gone quiet (virtualizer finished
+  // painting the current window). Bounded so slow platforms keep pace.
+  function waitSidebarSettle() {
     return new Promise((resolve) => {
-      let lastH = target.scrollHeight, count = 0;
-      const tick = setInterval(() => {
-        target.scrollBy(0, target.clientHeight || 500); count++;
-        const newH = target.scrollHeight;
-        if (newH === lastH || count >= 80) { clearInterval(tick); target.scrollTo(0, 0); setTimeout(resolve, 400); }
-        lastH = newH;
-      }, 400);
+      const QUIET_MS = 350, MAX_MS = 1500;
+      let quietT, maxT, obs;
+      const done = () => {
+        if (!obs) return;
+        clearTimeout(quietT); clearTimeout(maxT);
+        obs.disconnect(); obs = null;
+        resolve();
+      };
+      maxT  = setTimeout(done, MAX_MS);
+      quietT = setTimeout(done, QUIET_MS);
+      obs = new MutationObserver(() => { clearTimeout(quietT); quietT = setTimeout(done, QUIET_MS); });
+      obs.observe(document.body, { childList: true, subtree: true });
     });
+  }
+
+  // Click "Show more"-style pagination controls INSIDE the sidebar only —
+  // never page-level buttons.
+  function clickLoadMoreIn(container) {
+    const root = container || document.body;
+    for (const b of root.querySelectorAll('button,[role="button"],a')) {
+      if (b.dataset.bsClicked) continue;
+      const label = (b.getAttribute('aria-label') || b.innerText || '').trim().toLowerCase();
+      if (/^(show|load|see)\s+(more|older)(\s|$)/.test(label) || label === 'more') {
+        b.dataset.bsClicked = '1';
+        b.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Short human-readable descriptor of the element being scrolled (debug log).
+  function describeEl(el) {
+    if (!el) return 'null';
+    const tag = (el.tagName || '?').toLowerCase();
+    const id  = el.id ? `#${el.id}` : '';
+    const cls = typeof el.className === 'string' && el.className
+      ? `.${el.className.trim().split(/\s+/).slice(0, 2).join('.')}` : '';
+    return `<${tag}${id}${cls}>`;
+  }
+
+  // body.scrollTop is a silent no-op in standards-mode pages — the real
+  // window/document scroller is scrollingElement. Normalize once, use
+  // consistently for reading AND writing so positions always match.
+  function normalizeScrollTarget(el) {
+    return (el && el !== document.body && el.isConnected !== false)
+      ? el
+      : (document.scrollingElement || document.documentElement || el);
+  }
+
+  // Wait until the sidebar has actually hydrated (≥1 conversation anchor).
+  // Starting discovery earlier locks container-scoring onto an inert node,
+  // which is exactly what capped large accounts at the first ~30-item DOM
+  // window. Bounded so a genuinely empty account doesn't hang.
+  function waitForSidebarReady(maxMs = 12000) {
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const tick = () => {
+        const ready =
+          [...document.querySelectorAll('a[href]')].some(a => config.convUrlRe?.test(a.href)) ||
+          deepseekLocalChats(true).length > 0;
+        if (ready || Date.now() - t0 > maxMs) {
+          console.log(`[Brain Shadow][DISCOVERY] ${config.platform} sidebar ready: ${ready} (waited ${Date.now() - t0}ms)`);
+          return resolve(ready);
+        }
+        setTimeout(tick, 500);
+      };
+      tick();
+    });
+  }
+
+  // ── Discovery session state (one run per bulk import) ─────
+  let disco = null;
+
+  function newDiscoState() {
+    return { running: false, done: false, error: null, reason: null, total: 0, stalled: false, chats: [], stopRequested: false };
+  }
+
+  let lastProgressSent = 0;
+  function reportDiscoveryProgress(total, stalled) {
+    disco.total = total;
+    if (stalled !== undefined) disco.stalled = !!stalled;
+    const t = Date.now();
+    if (t - lastProgressSent < 800) return;
+    lastProgressSent = t;
+    try {
+      // Fire-and-forget heartbeat to the service worker — doubles as an
+      // MV3 keep-alive during long discoveries over huge accounts.
+      chrome.runtime.sendMessage(
+        { type: 'DISCOVERY_PROGRESS', platform: config.platform, discovered: total, stalled: !!stalled },
+        () => void chrome.runtime.lastError
+      );
+    } catch {}
+  }
+
+  async function runFullDiscovery() {
+    disco = newDiscoState();
+    disco.running = true;
+    deepseekLocalCache = null;
+    console.log(`[Brain Shadow][DISCOVERY] ${config.platform} discovery started`);
+    try {
+      // Never score/lock the scroll container before the sidebar exists.
+      await waitForSidebarReady();
+
+      // Startup diagnostics: exactly which elements are scroll candidates.
+      const cands = findSidebarCandidates();
+      console.log(
+        `[Brain Shadow][DISCOVERY][debug] ${config.platform} scroll candidates: ` +
+        cands.map((el, i) =>
+          `${i}:${describeEl(el)}(${el.scrollTop}/${el.scrollHeight}/${el.clientHeight})`
+        ).join(' | ')
+      );
+
+      const hooks = {
+        getContainers: findSidebarCandidates,
+        getContainer: () => findSidebarCandidates()[0] || document.body,
+        collectVisible: collectVisibleChats,
+        getScrollInfo: (el) => {
+          const t = normalizeScrollTarget(el);
+          return t
+            ? { scrollTop: t.scrollTop, clientHeight: t.clientHeight, scrollHeight: t.scrollHeight, scrollable: t.scrollHeight > t.clientHeight + 8 }
+            : { scrollTop: 0, clientHeight: 0, scrollHeight: 0, scrollable: false };
+        },
+        scrollStep: (el) => {
+          const t = normalizeScrollTarget(el);
+          if (!t) return;
+          const step = Math.min(800, Math.max(240, Math.floor((t.clientHeight || 600) * 0.8)));
+          const maxScroll = Math.max(0, (t.scrollHeight || 0) - (t.clientHeight || 0));
+          // Near the bottom edge, pull back first so the forward write is a
+          // REAL scroll event crossing the load-older sentinel — some
+          // infinite scrollers only react to actual downward movement.
+          if (maxScroll > 10 && maxScroll - t.scrollTop < step * 0.6) {
+            try { t.scrollTop = Math.max(0, maxScroll - 140); } catch {}
+          }
+          // Wheel event as well: virtualizers listening for wheel input
+          // (not scrollTop writes) still receive a genuine signal.
+          try {
+            t.dispatchEvent(new WheelEvent('wheel', { deltaY: step, bubbles: true, cancelable: true }));
+          } catch {}
+          try { t.scrollTop += step; } catch {}
+        },
+        scrollToTop: (el) => { try { normalizeScrollTarget(el).scrollTop = 0; } catch {} },
+        clickLoadMore: clickLoadMoreIn,
+        wait: (ms) => new Promise(r => setTimeout(r, ms)),
+        waitForSettle: waitSidebarSettle,
+        now: () => Date.now(),
+        onCycle: (d) => {
+          console.log(
+            `[Brain Shadow][DISCOVERY][debug] ${config.platform}` +
+            ` scroll#${d.cycle} target=${describeEl(d.el)}` +
+            ` scrollTop=${Math.round(d.scrollTop)} scrollHeight=${d.scrollHeight} clientHeight=${d.clientHeight}` +
+            ` atBottom=${d.atBottom} newAfterScroll=${d.addedThisCycle} uniqueTotal=${d.uniqueTotal}` +
+            ` stagnant=${d.stagnantCycles}/stable=${d.heightStableCycles}` +
+            ` quietMs=${d.msSinceActivity} cands=${d.candidates ?? 1}` +
+            `${d.stalled ? ' STALLING' : ''}` +
+            (d.containerSwitches ? ` containerSwitches=${d.containerSwitches}` : '')
+          );
+        },
+      };
+      const result = await globalThis.BrainShadow.DiscoveryEngine.runDiscovery(
+        hooks, {},
+        (total, extra) => reportDiscoveryProgress(total, extra?.stalled),
+        () => disco.stopRequested
+      );
+      disco.chats  = result.chats;
+      disco.total  = result.total;
+      disco.reason = result.reason;
+      console.log(`[Brain Shadow][DISCOVERY] ${config.platform} end of chat list detected after ${result.cycles} cycles — reason: ${result.reason}, stats:`, result.stats);
+    } catch (err) {
+      disco.error = err?.message || String(err);
+      console.error(`[Brain Shadow][DISCOVERY] ${config.platform} discovery error:`, disco.error);
+    } finally {
+      disco.done = true;
+      disco.running = false;
+      console.log(`[Brain Shadow][DISCOVERY] ${config.platform} total unique chats: ${disco.total}`);
+    }
+    return disco;
   }
 
   // ── Message listener ─────────────────────────────────────
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // Legacy single-call API — runs the FULL discovery before responding.
     if (request.type === 'GET_SIDEBAR_CHATS') {
-      scrollSidebarToLoadAll().then(() => sendResponse(extractRecents()));
+      (async () => {
+        if (!disco || (!disco.running && !disco.done)) await runFullDiscovery();
+        else while (disco.running) await new Promise(r => setTimeout(r, 500));
+        sendResponse(disco.chats.map(c => ({ url: c.url, title: c.title })));
+      })().catch(() => sendResponse([]));
+      return true;
+    }
+    // Two-phase protocol: background starts discovery, polls progress,
+    // then fetches the complete chat list ONLY once discovery is done.
+    if (request.type === 'START_DISCOVERY') {
+      if (disco?.running)       sendResponse({ status: 'running', total: disco.total });
+      else if (disco?.done)     sendResponse({ status: 'done', total: disco.total });
+      else { runFullDiscovery(); sendResponse({ status: 'started' }); }
+      return true;
+    }
+    if (request.type === 'DISCOVERY_POLL') {
+      sendResponse({
+        running: !!disco?.running,
+        done: !!disco?.done,
+        total: disco?.total || 0,
+        stalled: !!disco?.stalled,
+        error: disco?.error || null,
+        reason: disco?.reason || null,
+      });
+      return true;
+    }
+    if (request.type === 'GET_DISCOVERED_CHATS') {
+      sendResponse({ done: !!disco?.done, total: disco?.total || 0, chats: disco?.chats || [] });
+      return true;
+    }
+    if (request.type === 'STOP_DISCOVERY') {
+      if (disco) disco.stopRequested = true;
+      sendResponse({ status: 'stopping' });
+      return true;
+    }
+    if (request.type === 'RESET_DISCOVERY') {
+      disco = null;
+      deepseekLocalCache = null;
+      document.querySelectorAll('[data-bs-clicked]').forEach(el => delete el.dataset.bsClicked);
+      sendResponse({ status: 'reset' });
       return true;
     }
     if (request.type === 'CAPTURE_CURRENT') {

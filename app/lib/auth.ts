@@ -24,6 +24,7 @@ interface StoredUser {
 
 interface Session {
   email: string;
+  token?: string;
 }
 
 export interface PasswordRules {
@@ -325,8 +326,27 @@ export async function resetPassword(
 
 // ── Session ──────────────────────────────────────────────────────────────────
 
-export function setSession(email: string) {
-  writeJSON(SESSION_KEY, { email } satisfies Session);
+export function setSession(email: string, token?: string) {
+  console.log(`[JWT-SET-SESSION] ═══ setSession called ═══`);
+  console.log(`[JWT-SET-SESSION]   email: ${email}`);
+  console.log(`[JWT-SET-SESSION]   token type: ${typeof token}`);
+  console.log(`[JWT-SET-SESSION]   token is undefined: ${token === undefined}`);
+  console.log(`[JWT-SET-SESSION]   token is null: ${token === null}`);
+  console.log(`[JWT-SET-SESSION]   token is empty string: ${token === ''}`);
+  console.log(`[JWT-SET-SESSION]   token is falsy: ${!token}`);
+  console.log(`[JWT-SET-SESSION]   token length: ${token?.length ?? 0}`);
+  console.log(`[JWT-SET-SESSION]   token preview: ${token ? token.slice(0, 40) + '...' : 'N/A'}`);
+
+  writeJSON(SESSION_KEY, { email, token } satisfies Session);
+  if (typeof window !== "undefined") {
+    if (token) {
+      window.localStorage.setItem('shadowbrain_token', token);
+      console.log(`[JWT-SET-SESSION] ✅ localStorage.setItem('shadowbrain_token', ...) called`);
+      console.log(`[JWT-SET-SESSION]   Verify readback: ${window.localStorage.getItem('shadowbrain_token')?.slice(0, 40)}...`);
+    } else {
+      window.localStorage.removeItem('shadowbrain_token');
+    }
+  }
 }
 
 export function getSession(): Session | null {
@@ -336,6 +356,7 @@ export function getSession(): Session | null {
 export function clearSession() {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(SESSION_KEY);
+  window.localStorage.removeItem('shadowbrain_token');
 }
 
 export function getSelectedAgents(): string[] {

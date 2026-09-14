@@ -20,7 +20,7 @@ import {
   getSavedEmail,
   setSession,
 } from "@/app/lib/auth";
-import { googleLogin } from "@/app/lib/api";
+import { googleLogin, passwordAuth } from "@/app/lib/api";
 
 interface AuthScreenProps {
   onAuthenticated: (email: string) => void;
@@ -135,16 +135,33 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
     setError(null);
     setLoading(true);
 
-    const result =
-      mode === "login"
-        ? await login(email, password)
-        : await signUp(email, password, confirmPassword);
+    let result: { ok: true; email: string } | { ok: false; error: string };
+    let backendToken = "";
+    try {
+      if (mode === "signup" && password !== confirmPassword) {
+        result = { ok: false, error: "Passwords do not match." };
+      } else {
+        try {
+          const response = await passwordAuth(email, password, mode);
+          backendToken = response.token;
+          result = { ok: true, email: response.user.email };
+        } catch {
+          result = mode === "signup"
+            ? await signUp(email, password, confirmPassword)
+            : await login(email, password);
+        }
+      }
+    } catch (authError) {
+      result = { ok: false, error: authError instanceof Error ? authError.message : "Authentication failed." };
+    }
 
     setLoading(false);
     if (!result.ok) {
       setError(result.error);
       return;
     }
+
+    setSession(result.email, backendToken);
 
     if (rememberMe) {
       saveRememberMe(result.email);
@@ -160,11 +177,47 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
     setError(null);
     setLoading(true);
     try {
-      const user = await googleLogin(credential);
-      setSession(user.email);
-      onAuthenticated(user.email);
-    } catch {
-      setError("Google sign-in failed. Please try again.");
+      const res = await googleLogin(credential);
+
+      // ── STEP 1: Log complete response from googleLogin() ──
+      console.log(`[JWT-STEP-1] ═══ Google Login Response ═══`);
+      console.log(`[JWT-STEP-1]   email:    ${res.user?.email}`);
+      console.log(`[JWT-STEP-1]   name:     ${res.user?.name}`);
+      console.log(`[JWT-STEP-1]   token:    ${res.token ? 'PRESENT' : 'MISSING'}`);
+      console.log(`[JWT-STEP-1]   token type: ${typeof res.token}`);
+      console.log(`[JWT-STEP-1]   token is empty string: ${res.token === ''}`);
+      console.log(`[JWT-STEP-1]   token length: ${res.token?.length ?? 0}`);
+      console.log(`[JWT-STEP-1]   token preview: ${res.token ? res.token.slice(0, 40) + '...' : 'N/A'}`);
+      console.log(`[JWT-STEP-1]   token full: ${JSON.stringify(res.token)}`);
+      if (!res.token) {
+        console.error(`[JWT-STEP-1] ❌ FAIL — Token is missing/empty from googleLogin(). The backend returned it but the frontend could not extract it.`);
+      } else {
+        console.log(`[JWT-STEP-1] ✅ PASS — Token received from googleLogin()`);
+      }
+
+      setSession(res.user.email, res.token);
+
+      // ── STEP 2: Verify localStorage after setSession() ──
+      const storedAfter = localStorage.getItem('shadowbrain_token');
+      console.log(`[JWT-STEP-2] ═══ After setSession() — localStorage check ═══`);
+      console.log(`[JWT-STEP-2]   localStorage value: ${storedAfter ? 'PRESENT' : 'MISSING'}`);
+      console.log(`[JWT-STEP-2]   type: ${typeof storedAfter}`);
+      console.log(`[JWT-STEP-2]   is empty: ${storedAfter === ''}`);
+      console.log(`[JWT-STEP-2]   length: ${storedAfter?.length ?? 0}`);
+      console.log(`[JWT-STEP-2]   preview: ${storedAfter ? storedAfter.slice(0, 40) + '...' : 'N/A'}`);
+      console.log(`[JWT-STEP-2]   full: ${JSON.stringify(storedAfter)}`);
+      if (!storedAfter) {
+        console.error(`[JWT-STEP-2] ❌ FAIL — localStorage has NO token after setSession(). setSession() received token=${JSON.stringify(res.token)}`);
+        console.error(`[JWT-STEP-2]   This means setSession() treated the token as falsy and REMOVED it.`);
+      } else {
+        console.log(`[JWT-STEP-2] ✅ PASS — Token stored in localStorage`);
+      }
+
+      onAuthenticated(res.user.email);
+    } catch (err) {
+      console.error(`[JWT-STEP-1] ❌ FAIL — googleLogin() threw: ${err instanceof Error ? err.message : String(err)}`);
+      console.error("[GoogleSignIn]", err);
+      setError(err instanceof Error ? err.message : "Google sign-in failed. Please try again.");
     } finally {
       setLoading(false);
     }

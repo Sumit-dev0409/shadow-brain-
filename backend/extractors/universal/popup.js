@@ -47,10 +47,11 @@ function setBackendStatus(state, msg) {
 async function testBackend(url) {
   setBackendStatus('idle', 'Testing…');
   try {
-    const backendUrl = (url || 'http://localhost:8000').replace(/\/$/, '');
+    const backendUrl = (url || 'https://shadow-brain-u4ua.onrender.com').replace(/\/$/, '');
     const res = await fetch(`${backendUrl}/health`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     setBackendStatus('ok', '✓ Backend connected — syncing all chats…');
+    // Sync all unsynced conversations directly from popup context
     await syncAllToBackend(backendUrl);
     return true;
   } catch (err) {
@@ -60,24 +61,40 @@ async function testBackend(url) {
   }
 }
 
-async function syncAllToBackend(_backendUrl) {
-  // Delegate to background service worker so sync completes even if popup closes
-  try {
-    const result = await chrome.runtime.sendMessage({ type: 'SYNC_ALL_TO_BACKEND' });
-    if (!result) return;
-    if (result.synced > 0) {
-      setBackendStatus('ok', `✓ Synced ${result.synced} / ${result.total} chats to MongoDB`);
-      showToast(`Synced ${result.synced} chats to MongoDB ✅`, 'success');
-      await loadStats();
-      await loadRecentConversations();
-    } else if (result.total > 0) {
-      setBackendStatus('error', `✗ 0/${result.total} synced — check backend logs`);
-    }
-    if (result.failed > 0) {
-      console.warn(`[Brain Shadow] ${result.failed} conversations failed to sync — open background inspector for details`);
-    }
-  } catch (e) {
-    console.warn('[Brain Shadow] syncAllToBackend error:', e.message);
+async function syncAllToBackend(backendUrl) {
+  const convs = await chrome.runtime.sendMessage({ type: 'GET_ALL_CONVERSATIONS' });
+  if (!convs?.length) return;
+
+  // Read JWT from extension storage — required for authenticated backend calls
+  const jwtResult = await chrome.runtime.sendMessage({ type: 'GET_JWT' });
+  const token = jwtResult?.token;
+  if (!token) {
+    setBackendStatus('error', '✗ Not signed in — log in on the Brain Shadow web app first');
+    return;
+  }
+
+  // Only sync conversations that haven't been synced yet
+  const unsynced = convs.filter(c => !c.synced);
+  if (!unsynced.length) return;
+  let synced = 0;
+  for (const conv of unsynced) {
+    try {
+      const res = await fetch(`${backendUrl}/api/import/capture`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(conv),
+      });
+      if (res.ok) synced++;
+    } catch {}
+  }
+  if (synced > 0) {
+    setBackendStatus('ok', `✓ Synced ${synced} / ${convs.length} chats to MongoDB`);
+    showToast(`Synced ${synced} chats to MongoDB ✅`, 'success');
+    await loadStats();
+    await loadRecentConversations();
   }
 }
 
@@ -89,7 +106,17 @@ async function loadStats() {
   document.getElementById('totalMsgs').textContent      = meta.total_messages      || 0;
   document.getElementById('totalPlatforms').textContent = Object.keys(meta.platforms || {}).length;
 
+  // Discovered totals (from the discovery phase) override captured counts
+  // so badges show the REAL number of chats on the platform, e.g.
+  // "ChatGPT (200)" even before all of them finish scraping.
+  const prog     = await chrome.runtime.sendMessage({ type: 'GET_SCRAPE_PROGRESS' });
+  const sessions = prog?.sessions || {};
+
   const platforms = meta.platforms || {};
+  // Include platforms that were discovered but have no captures yet
+  for (const [p, s] of Object.entries(sessions)) {
+    if (s?.discoveredTotal > 0 && !(p in platforms)) platforms[p] = s.discoveredTotal;
+  }
   const div = document.getElementById('platformBadges');
   div.innerHTML = '';
   if (!Object.keys(platforms).length) {
@@ -98,9 +125,13 @@ async function loadStats() {
   }
   Object.entries(platforms).sort((a, b) => b[1] - a[1]).forEach(([p, count]) => {
     const label = PLATFORM_LABELS[p] || p;
+    const shown = sessions[p]?.discoveredTotal ?? count;
     const el = document.createElement('div');
     el.className = 'badge active';
-    el.innerHTML = `<span class="dot"></span>${label} (${count})`;
+    el.title = sessions[p]?.discoveredTotal != null
+      ? `${shown} chats discovered on ${p}`
+      : `${count} conversations captured from ${p}`;
+    el.innerHTML = `<span class="dot"></span>${label} (${shown})`;
     div.appendChild(el);
   });
 }
@@ -126,6 +157,7 @@ function renderProgress(prog) {
   const sessions    = prog.sessions;
   const runningSess = Object.entries(sessions).filter(([, s]) => s.running);
   const anyRunning  = runningSess.length > 0;
+  const labelFor    = (p) => PLATFORM_LABELS[p] || p;
 
   // Sessions bar (shows all active platform names)
   const bar = document.getElementById('sessionsBar');
@@ -134,7 +166,9 @@ function renderProgress(prog) {
     document.getElementById('sessionsList').innerHTML = runningSess.map(([p, s]) => `
       <div class="session-chip">
         <span class="spin">◌</span>
-        ${PLATFORM_LABELS[p] || p} — ${s.current||0}/${s.total||'?'}
+        ${s.phase === 'discovery'
+          ? `🔍 Discovering ${labelFor(p)} — ${s.discovered || 0} found`
+          : `${labelFor(p)} — ${s.current || 0}/${s.total || '?'}`}
       </div>`).join('');
   }
 
@@ -145,12 +179,43 @@ function renderProgress(prog) {
   const progSection = document.getElementById('progressSection');
   if (currentSess && (currentSess.running || currentSess.done)) {
     progSection.classList.add('visible');
-    document.getElementById('progressFill').style.width  = `${currentSess.pct || 0}%`;
-    document.getElementById('progressCount').textContent = `${currentSess.current||0} / ${currentSess.total||0}`;
-    document.getElementById('progressTitle').textContent = currentSess.title || '…';
-    document.getElementById('progressLabel').textContent =
-      currentSess.running ? `Scraping ${PLATFORM_LABELS[currentPlatform] || currentPlatform}…` :
-      currentSess.done    ? '✅ Done' : 'Starting…';
+    const fill        = document.getElementById('progressFill');
+    const count       = document.getElementById('progressCount');
+    const lbl         = document.getElementById('progressLabel');
+    const titleEl     = document.getElementById('progressTitle');
+    const discovering = currentSess.phase === 'discovery';
+
+    if (discovering) {
+      // Indeterminate bar — total isn't known until discovery finishes.
+      fill.classList.add('indeterminate');
+      fill.style.width = '100%';
+      count.textContent = `${currentSess.discovered || 0} found`;
+      lbl.textContent   = `🔍 Discovering ${labelFor(currentPlatform)} chats…`;
+      titleEl.textContent = currentSess.stalled
+        ? 'Sidebar renderer paused — boosting…'
+        : 'Walking the full sidebar — no limit, this can take a few minutes';
+    } else {
+      fill.classList.remove('indeterminate');
+      fill.style.width   = `${currentSess.pct || 0}%`;
+      // Denominator ALWAYS equals the discovered total for this session.
+      count.textContent = `${currentSess.current || 0} / ${currentSess.total || 0}`;
+      lbl.textContent   =
+        currentSess.running ? `Scraping ${labelFor(currentPlatform)}…` :
+        currentSess.done    ? '✅ Done' : 'Starting…';
+      titleEl.textContent = currentSess.title || '…';
+    }
+    // Show saved/skipped/duplicate/failed detail
+    const detail = document.getElementById('progressDetail');
+    if (detail) {
+      const parts = [];
+      if (currentSess.savedCount > 0) parts.push(`${currentSess.savedCount} saved`);
+      if (currentSess.duplicateCount > 0) parts.push(`${currentSess.duplicateCount} duplicates`);
+      if (currentSess.skippedCount > 0) parts.push(`${currentSess.skippedCount} skipped`);
+      else if (currentSess.skipped > 0) parts.push(`${currentSess.skipped} skipped`);
+      if (currentSess.emptyCount > 0) parts.push(`${currentSess.emptyCount} empty`);
+      if (currentSess.failedCount > 0) parts.push(`${currentSess.failedCount} failed`);
+      detail.textContent = parts.join(' · ') || '';
+    }
   } else if (!anyRunning) {
     progSection.classList.remove('visible');
   }
@@ -161,7 +226,9 @@ function renderProgress(prog) {
 
   if (thisPlatformRunning) {
     btn.disabled    = true;
-    btn.textContent = `⏳ Scraping ${PLATFORM_LABELS[currentPlatform] || currentPlatform}…`;
+    btn.textContent = sessions[currentPlatform].phase === 'discovery'
+      ? `🔍 Discovering ${labelFor(currentPlatform)}…`
+      : `⏳ Scraping ${labelFor(currentPlatform)}…`;
   } else {
     btn.disabled    = false;
     btn.textContent = '⚡ Bulk Import All Past Chats';
@@ -205,11 +272,14 @@ document.getElementById('btnBulkImport').addEventListener('click', async () => {
   } else if (result?.status === 'started') {
     showToast(`Started ${PLATFORM_LABELS[match.platform] || match.platform} — popup can be closed safely!`, 'success');
     document.getElementById('btnBulkImport').disabled    = true;
-    document.getElementById('btnBulkImport').textContent = `⏳ Scraping…`;
+    document.getElementById('btnBulkImport').textContent = `🔍 Discovering ${PLATFORM_LABELS[match.platform] || match.platform}…`;
     document.getElementById('btnForceStop').style.display = 'flex';
     document.getElementById('progressSection').classList.add('visible');
-    document.getElementById('progressLabel').textContent  = `Scraping ${PLATFORM_LABELS[match.platform] || match.platform}…`;
-    document.getElementById('progressTitle').textContent  = 'Opening background tab…';
+    document.getElementById('progressLabel').textContent  = `🔍 Discovering ${PLATFORM_LABELS[match.platform] || match.platform} chats…`;
+    document.getElementById('progressCount').textContent  = '0 found';
+    document.getElementById('progressFill').classList.add('indeterminate');
+    document.getElementById('progressFill').style.width   = '100%';
+    document.getElementById('progressTitle').textContent  = 'Walking the full sidebar before any scraping starts…';
   }
 });
 
@@ -219,7 +289,7 @@ document.getElementById('btnSyncNow').addEventListener('click', async () => {
   btn.disabled = true;
   btn.textContent = '⏳ Syncing…';
   const urlResult  = await chrome.runtime.sendMessage({ type: 'GET_BACKEND_URL' });
-  const backendUrl = (urlResult?.url || 'http://localhost:8000').replace(/\/$/, '');
+  const backendUrl = (urlResult?.url || 'https://shadow-brain-u4ua.onrender.com').replace(/\/$/, '');
   try {
     const res = await fetch(`${backendUrl}/health`);
     if (!res.ok) throw new Error(`Backend returned ${res.status}`);
@@ -266,12 +336,18 @@ document.getElementById('btnCaptureCurrent').addEventListener('click', async () 
 document.getElementById('btnExport').addEventListener('click', async () => {
   const data = await chrome.runtime.sendMessage({ type: 'EXPORT_DATA' });
   if (!data?.conversations?.length) { showToast('No data to export', 'error'); return; }
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href = url; a.download = `${EXPORT_NAME}_${new Date().toISOString().split('T')[0]}.json`;
-  a.click(); URL.revokeObjectURL(url);
-  showToast(`Exported ${data.conversations.length} conversations`, 'success');
+  const blob  = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url   = URL.createObjectURL(blob);
+  const fname = `${EXPORT_NAME}_${new Date().toISOString().split('T')[0]}.json`;
+  // Use chrome.downloads API — a.click() in MV3 popups is unreliable
+  chrome.downloads.download({ url, filename: fname, saveAs: true }, (id) => {
+    URL.revokeObjectURL(url);
+    if (chrome.runtime.lastError || id === undefined) {
+      showToast(`Export failed: ${chrome.runtime.lastError?.message || 'unknown error'}`, 'error');
+    } else {
+      showToast(`Exported ${data.conversations.length} conversations`, 'success');
+    }
+  });
 });
 
 // ── Clear Data ─────────────────────────────────────────────
@@ -286,7 +362,7 @@ document.getElementById('btnClear').addEventListener('click', async () => {
 
 // ── Backend URL ────────────────────────────────────────────
 document.getElementById('btnTestUrl').addEventListener('click', async () => {
-  await testBackend(document.getElementById('backendUrl').value.trim() || 'http://localhost:8000');
+  await testBackend(document.getElementById('backendUrl').value.trim() || 'https://shadow-brain-u4ua.onrender.com');
 });
 document.getElementById('btnSaveUrl').addEventListener('click', async () => {
   const url = document.getElementById('backendUrl').value.trim(); if (!url) return;
@@ -298,6 +374,8 @@ document.getElementById('btnSaveUrl').addEventListener('click', async () => {
 chrome.storage.onChanged.addListener((changes) => {
   if (changes['brain_shadow_scrape_progress']) {
     renderProgress(changes['brain_shadow_scrape_progress'].newValue);
+    // Keep platform badges in sync with discovered totals
+    loadStats();
   }
   if (changes['brain_shadow_conversations'] || changes['brain_shadow_meta']) {
     loadStats(); loadRecentConversations();
@@ -307,7 +385,7 @@ chrome.storage.onChanged.addListener((changes) => {
 // ── Init ───────────────────────────────────────────────────
 (async () => {
   const urlResult  = await chrome.runtime.sendMessage({ type: 'GET_BACKEND_URL' });
-  document.getElementById('backendUrl').value = urlResult?.url || 'http://localhost:8000';
+  document.getElementById('backendUrl').value = urlResult?.url || 'https://shadow-brain-u4ua.onrender.com';
 
   // Detect current tab's platform
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -325,5 +403,5 @@ chrome.storage.onChanged.addListener((changes) => {
   if (prog) renderProgress(prog);
 
   // Test backend directly from popup (not via service worker)
-  await testBackend(urlResult?.url || 'http://localhost:8000');
+  await testBackend(urlResult?.url || 'https://shadow-brain-u4ua.onrender.com');
 })();

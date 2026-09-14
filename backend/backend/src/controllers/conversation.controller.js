@@ -4,66 +4,120 @@ const groqService = require('../services/groq.service');
 const logger = require('../utils/logger');
 
 const createConversation = async (req, res, next) => {
+  const startTime = Date.now();
   try {
-    logger.info('DEBUG: [REQUEST RECEIVED] POST /api/conversations');
-    logger.debug('DEBUG: Body:', JSON.stringify(req.body, null, 2));
+    console.log(`\n[JWT-STEP-8] ═══ createConversation START ═══`);
+    console.log(`[JWT-STEP-8]   Timestamp: ${new Date().toISOString()}`);
+    console.log(`[JWT-STEP-8]   req.user: ${JSON.stringify(req.user)}`);
+    console.log(`[JWT-STEP-8]   req.user.userId: ${req.user?.userId || 'MISSING'}`);
+    console.log(`[JWT-STEP-8]   req.user.email: ${req.user?.email || 'MISSING'}`);
+
+    if (!req.user?.userId) {
+      console.error(`[JWT-STEP-8] ❌ FAIL — req.user.userId is missing. Middleware did not set req.user.`);
+      return res.status(401).json({ message: 'User not authenticated' });
+    }
+
+    console.log(`[JWT-STEP-8] ✅ PASS — req.user.userId = "${req.user.userId}"`);
 
     if (!req.body || Object.keys(req.body).length === 0) {
-      logger.warn('DEBUG: Empty request body received');
+      console.error(`[JWT-STEP-8] ❌ FAIL — Empty request body`);
       return res.status(400).json({ message: 'Empty request body' });
     }
 
-    const conversation = await conversationService.createOrUpdate(req.body);
-    logger.info(`[CAPTURE] ${conversation.platform} | "${conversation.title?.slice(0,50)}" | ${conversation.messages?.length} msgs | status: ${conversation.status}`);
+    const { platform, external_id, title, messages } = req.body;
+    console.log(`[JWT-STEP-8]   platform: "${platform}"`);
+    console.log(`[JWT-STEP-8]   external_id: "${external_id}"`);
+    console.log(`[JWT-STEP-8]   title: "${(title || '').substring(0, 60)}"`);
+    console.log(`[JWT-STEP-8]   messages count: ${(messages || []).length}`);
+    console.log(`[JWT-STEP-8]   MongoDB save will use userId: "${req.user.userId}"`);
+
+    // Validate platform enum before hitting the service
+    const VALID_PLATFORMS = ['chatgpt', 'claude', 'gemini', 'deepseek', 'blackbox', 'copilot', 'mscopilot', 'perplexity', 'grok'];
+    const normalizedPlatform = platform ? platform.toLowerCase() : 'chatgpt';
+    if (!VALID_PLATFORMS.includes(normalizedPlatform)) {
+      console.error(`[JWT-STEP-8] ❌ FAIL — INVALID PLATFORM: "${platform}"`);
+      return res.status(400).json({
+        message: `Invalid platform: "${platform}". Valid: ${VALID_PLATFORMS.join(', ')}`
+      });
+    }
+
+    console.log(`[JWT-STEP-8]   Calling conversationService.createOrUpdate(data, "${req.user.userId}")...`);
+    const conversation = await conversationService.createOrUpdate(req.body, req.user.userId);
+    console.log(`[JWT-STEP-8] ✅ PASS — MongoDB save confirmed`);
+    console.log(`[JWT-STEP-8]   _id: ${conversation._id}`);
+    console.log(`[JWT-STEP-8]   platform: ${conversation.platform}`);
+    console.log(`[JWT-STEP-8]   userId in doc: ${conversation.userId}`);
+    console.log(`[JWT-STEP-8]   messages: ${conversation.messages?.length}`);
+    console.log(`[JWT-STEP-8]   DB write in ${Date.now() - startTime}ms`);
     
     // Trigger enrichment immediately (no queue)
     setImmediate(() => {
-      logger.info(`DEBUG: [ENRICHMENT TRIGGERED] for ${conversation._id}`);
+      console.log(`[JWT-STEP-8]   Triggering enrichment for ${conversation._id}`);
       enrichmentService.process(conversation._id).catch(err => {
-        logger.error(`DEBUG: Background enrichment failed for ${conversation._id}: ${err.message}`);
+        console.error(`[JWT-STEP-8]   Background enrichment failed: ${err.message}`);
       });
     });
 
-    res.status(202).json({
+    const responseBody = {
       message: 'Conversation received and enrichment started',
       id: conversation._id,
       status: 'PENDING'
-    });
+    };
+    console.log(`[JWT-STEP-8]   Sending 202 response`);
+    console.log(`[JWT-STEP-8] ═══ createConversation END (success) ═══\n`);
+    res.status(202).json(responseBody);
   } catch (error) {
-    logger.error(`DEBUG: [CONTROLLER ERROR] ${error.message}`);
+    console.error(`[JWT-STEP-8] ❌ FAIL — createConversation error: ${error.message}`);
+    console.error(`[JWT-STEP-8]   Stack: ${error.stack}`);
     next(error);
   }
 };
 
 const bulkCreateConversations = async (req, res, next) => {
+  const startTime = Date.now();
   try {
-    logger.info(`DEBUG: [REQUEST RECEIVED] POST /api/conversations/bulk - Count: ${req.body.conversations?.length}`);
+    console.log(`\n[CONTROLLER] ─── bulkCreateConversations START ───`);
     const { conversations } = req.body;
+    console.log(`[CONTROLLER] Bulk payload: ${Array.isArray(conversations) ? conversations.length + ' items' : 'NOT AN ARRAY'}`);
+    
     if (!Array.isArray(conversations)) {
+      console.error(`[CONTROLLER] conversations is not an array: ${typeof conversations}`);
       return res.status(400).json({ message: 'conversations must be an array' });
     }
 
     const results = [];
-    for (const convoData of conversations) {
-      const convo = await conversationService.createOrUpdate(convoData);
-      logger.info(`DEBUG: [CONTROLLER] Bulk item processed: ${convo._id}`);
-      
-      // Trigger enrichment immediately
-      setImmediate(() => {
-        logger.info(`DEBUG: [ENRICHMENT TRIGGERED] for ${convo._id}`);
-        enrichmentService.process(convo._id).catch(err => {
-          logger.error(`DEBUG: Background enrichment failed for ${convo._id}: ${err.message}`);
+    const errors = [];
+    for (let i = 0; i < conversations.length; i++) {
+      const convoData = conversations[i];
+      console.log(`[CONTROLLER] Bulk item ${i + 1}/${conversations.length}: platform="${convoData.platform}", external_id="${convoData.external_id}", title="${(convoData.title || '').substring(0, 40)}"`);
+      try {
+        const convo = await conversationService.createOrUpdate(convoData, req.user.userId);
+        console.log(`[CONTROLLER] Bulk item ${i + 1} OK: _id=${convo._id}`);
+        
+        setImmediate(() => {
+          enrichmentService.process(convo._id).catch(err => {
+            console.error(`[CONTROLLER] Bulk enrichment failed for ${convo._id}: ${err.message}`);
+          });
         });
-      });
-      results.push(convo._id);
+        results.push(convo._id);
+      } catch (itemError) {
+        console.error(`[CONTROLLER] Bulk item ${i + 1} FAILED: ${itemError.message}`);
+        console.error(`[CONTROLLER] Item error stack: ${itemError.stack}`);
+        errors.push({ index: i, error: itemError.message, platform: convoData.platform });
+      }
     }
 
+    console.log(`[CONTROLLER] Bulk complete: ${results.length} success, ${errors.length} failed, ${Date.now() - startTime}ms`);
+    console.log(`[CONTROLLER] ─── bulkCreateConversations END ───\n`);
     res.status(202).json({
       message: `Received ${results.length} conversations, enrichment started`,
-      ids: results
+      ids: results,
+      errors: errors.length > 0 ? errors : undefined
     });
   } catch (error) {
-    logger.error(`DEBUG: [CONTROLLER ERROR] ${error.message}`);
+    console.error(`[CONTROLLER] ─── bulkCreateConversations ERROR ───`);
+    console.error(`[CONTROLLER] Error: ${error.message}`);
+    console.error(`[CONTROLLER] Stack: ${error.stack}`);
     next(error);
   }
 };
@@ -71,7 +125,7 @@ const bulkCreateConversations = async (req, res, next) => {
 const listConversations = async (req, res, next) => {
   try {
     const { page, limit, platform } = req.query;
-    const query = platform ? { platform } : {};
+    const query = platform ? { platform, userId: req.user.userId } : { userId: req.user.userId };
     const conversations = await conversationService.list(query, { page: Number(page), limit: Number(limit) });
     res.json(conversations);
   } catch (error) {
@@ -81,7 +135,7 @@ const listConversations = async (req, res, next) => {
 
 const getConversationById = async (req, res, next) => {
   try {
-    const conversation = await conversationService.getById(req.params.id);
+    const conversation = await conversationService.getById(req.params.id, req.user.userId);
     if (!conversation) return res.status(404).json({ message: 'Not found' });
     res.json(conversation);
   } catch (error) {
@@ -91,7 +145,7 @@ const getConversationById = async (req, res, next) => {
 
 const getConversationStatus = async (req, res, next) => {
   try {
-    const conversation = await conversationService.getById(req.params.id);
+    const conversation = await conversationService.getById(req.params.id, req.user.userId);
     if (!conversation) return res.status(404).json({ message: 'Not found' });
     res.json({
       id: conversation._id,
@@ -104,6 +158,14 @@ const getConversationStatus = async (req, res, next) => {
 };
 
 const buildFallbackAnswer = (query, scored) => {
+  const count = scored.length;
+  const countPhrase = count === 1
+    ? '1 conversation'
+    : count <= 3
+      ? 'a few conversations'
+      : count <= 10
+        ? 'several conversations'
+        : 'many conversations';
   const topResults = scored.slice(0, 3);
   const sentences = topResults.map(({ conv }, index) => {
     const date = conv.createdAt
@@ -115,7 +177,7 @@ const buildFallbackAnswer = (query, scored) => {
     return `${index + 1}. ${conv.title || 'Untitled'} on ${platform} (${date}) discussed ${detail}`;
   });
 
-  return `I found ${scored.length} conversation${scored.length === 1 ? '' : 's'} related to "${query}". ${sentences.join(' ')}.`;
+  return `I found ${countPhrase} related to "${query}".\n${sentences.join('\n')}.`;
 };
 
 const searchConversations = async (req, res, next) => {
@@ -135,9 +197,10 @@ const searchConversations = async (req, res, next) => {
     // Prefix-aware matching: \b at start so "mongo" matches "mongodb", "mongodb" etc.
     const wordRegexes = words.map(w => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi'));
 
-    const dbFilter = Array.isArray(platforms) && platforms.length > 0
-      ? { platform: { $in: platforms } }
-      : {};
+    const dbFilter = { userId: req.user.userId };
+    if (Array.isArray(platforms) && platforms.length > 0) {
+      dbFilter.platform = { $in: platforms };
+    }
     const allConvs = await conversationService.list(dbFilter, { limit: 200 });
 
     const scored = allConvs
@@ -210,6 +273,7 @@ ${context}
 
 Write 2-3 plain sentences summarising what was discussed about "${query}". Your response must:
 - Be written in plain English sentences (no markdown, no bullet points, no headers)
+- Put each conversation reference on its own line
 - Mention the platform name (e.g. ChatGPT, Gemini) for each conversation referenced
 - Only describe what was actually in the messages shown above
 - Not include steps, code, or detailed explanations`;

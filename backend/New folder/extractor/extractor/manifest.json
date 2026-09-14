@@ -39,6 +39,14 @@
       "matches": ["https://gemini.google.com/*"],
       "js": ["content/gemini.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://localhost/*",
+        "https://shadow-brain-4lux.vercel.app/*"
+      ],
+      "js": ["content/shadowbrain.js"],
+      "run_at": "document_idle"
     }
   ],
   "action": {

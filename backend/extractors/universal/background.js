@@ -14,7 +14,8 @@ const STORAGE_KEY  = 'brain_shadow_conversations';
 const META_KEY     = 'brain_shadow_meta';
 const BACKEND_KEY  = 'brain_shadow_backend_url';
 const PROGRESS_KEY = 'brain_shadow_scrape_progress';
-const DEFAULT_BACKEND = 'http://localhost:8000';
+const JWT_KEY      = 'brain_shadow_jwt_token';
+const DEFAULT_BACKEND = 'https://shadow-brain-u4ua.onrender.com';
 
 // ── Keep service worker alive during scraping ──────────────
 let keepAliveTimer = null;
@@ -110,7 +111,7 @@ async function scrapePlatform(platform, baseUrl) {
   startKeepAlive();
 
   await setSessionProgress(platform, {
-    running: true, done: false, stopRequested: false,
+    running: true, done: false, stopRequested: false, phase: 'init',
     current: 0, total: 0, pct: 0, savedCount: 0, syncedCount: 0,
     title: 'Opening background tab…', startedAt: new Date().toISOString(),
   });
@@ -126,21 +127,83 @@ async function scrapePlatform(platform, baseUrl) {
     tabId = tab.id;
     await waitForTabLoad(tabId, 2500);
 
-    await setSessionProgress(platform, { title: 'Reading sidebar…' });
+    // ════════════════════════════════════════════════════════
+    // PHASE 1 — DISCOVER ALL CHATS
+    //
+    // The content script walks the ENTIRE virtualized sidebar (scroll →
+    // harvest → merge into a persistent map → repeat until the real end
+    // of the list) and only then reports back. Scraping cannot start
+    // before this resolves — there is no chat-count cap anywhere; the
+    // discovered total IS however many conversations the account has.
+    // ════════════════════════════════════════════════════════
+    await setSessionProgress(platform, {
+      phase: 'discovery', discovered: 0, total: 0,
+      title: 'Discovering all chats…',
+    });
+    console.log(`[Brain Shadow][DISCOVERY] ${platform} discovery started`);
 
-    const threads = await tabMessage(tabId, { type: 'GET_SIDEBAR_CHATS' }) || [];
+    await tabMessage(tabId, { type: 'RESET_DISCOVERY' });
+    await tabMessage(tabId, { type: 'START_DISCOVERY' });
+
+    // Poll-driven (not one long message) so the MV3 service worker stays
+    // alive via repeated activity even when discovery takes many minutes
+    // on accounts with hundreds of chats.
+    const DISCOVERY_MAX_MS = 15 * 60 * 1000;
+    const discStart = Date.now();
+    let lastSeenTotal = -1, lastBoostAt = 0;
+    while (Date.now() - discStart < DISCOVERY_MAX_MS) {
+      await new Promise(r => setTimeout(r, 700));
+
+      const prog = await getProgress();
+      if (prog.sessions?.[platform]?.stopRequested) {
+        await tabMessage(tabId, { type: 'STOP_DISCOVERY' }).catch(() => {});
+        break;
+      }
+
+      const st = await tabMessage(tabId, { type: 'DISCOVERY_POLL' });
+      if (st) {
+        if (st.total !== lastSeenTotal) {
+          lastSeenTotal = st.total;
+          await setSessionProgress(platform, { discovered: st.total, stalled: !!st.stalled });
+          console.log(`[Brain Shadow][DISCOVERY] ${platform} progress → ${st.total} unique chats`);
+        }
+        // Hidden tabs get timer-throttled by Chrome after a few minutes,
+        // which can freeze the sidebar's virtualizer mid-discovery. If the
+        // engine reports zero movement, briefly foreground the tab to
+        // flush rendering, then hide it again.
+        if (st.stalled && !st.done && Date.now() - lastBoostAt > 25000) {
+          lastBoostAt = Date.now();
+          console.log(`[Brain Shadow][DISCOVERY] ${platform} renderer stalled — boosting hidden tab`);
+          try {
+            await chrome.tabs.update(tabId, { active: true });
+            await new Promise(r => setTimeout(r, 1500));
+            await chrome.tabs.update(tabId, { active: false });
+          } catch {}
+          await setSessionProgress(platform, { stalled: false });
+        }
+        if (st.done || st.error) break;
+      }
+    }
+
+    // Discovery is complete — fetch the FULL deduplicated list.
+    const discRes = await tabMessage(tabId, { type: 'GET_DISCOVERED_CHATS' });
+    const threads = (discRes?.chats || []).filter(t => t && t.url);
 
     if (!threads.length) {
       await setSessionProgress(platform, { running: false, done: true, pct: 100, title: 'No conversations found' });
       return;
     }
 
-    // Filter already-captured conversations — but only skip ones captured
-    // recently. Without a freshness window, a conversation captured once
-    // was excluded from every future bulk import forever, even after the
-    // user kept chatting in it — so its message count and enrichment in the
-    // DB would stay frozen at whatever it was on the very first capture,
-    // no matter how much the real conversation grew afterward.
+    console.log(`[Brain Shadow][DISCOVERY] ${platform}: discovery complete — ${threads.length} unique chats`);
+
+    // ════════════════════════════════════════════════════════
+    // PHASE 2 — CREATE COMPLETE SCRAPING QUEUE & START SCRAPING
+    //
+    // The queue is built from the DISCOVERED total. Denominator in the UI
+    // always equals threads.length. Duplicate prevention is preserved:
+    // recently-captured conversations are skipped in place (without
+    // navigating), so progress still walks 1..discoveredTotal.
+    // ════════════════════════════════════════════════════════
     const RECAPTURE_AFTER_MS = 6 * 60 * 60 * 1000; // re-check anything older than 6h
     const existing = await getAllConversations();
     const capturedPaths = new Map();
@@ -153,36 +216,37 @@ async function scrapePlatform(platform, baseUrl) {
       } catch { /* skip unparseable URLs — treat as not captured */ }
     }
     const now = Date.now();
-    const newThreads = threads.filter(t => {
-      try {
-        const savedAt = capturedPaths.get(new URL(t.url).pathname);
-        return savedAt === undefined || (now - savedAt) > RECAPTURE_AFTER_MS;
-      } catch { return true; }
+
+    await setSessionProgress(platform, {
+      phase: 'scrape',
+      total: threads.length,
+      discoveredTotal: threads.length,
+      title: `Discovered ${threads.length} chats — starting…`,
     });
-    const skipped = threads.length - newThreads.length;
 
-    if (!newThreads.length) {
-      await setSessionProgress(platform, { running: false, done: true, pct: 100, skipped, title: `All ${threads.length} already captured` });
-      return;
-    }
+    let savedCount = 0, syncedCount = 0, failedCount = 0, skipped = 0;
 
-    await setSessionProgress(platform, { total: newThreads.length, skipped, title: `Found ${newThreads.length} new chats` });
-
-    let savedCount = 0, syncedCount = 0, failedCount = 0;
-
-    for (let i = 0; i < newThreads.length; i++) {
+    for (let i = 0; i < threads.length; i++) {
       // Check this session's stop flag (not global — each session has its own)
       const prog = await getProgress();
       if (prog.sessions?.[platform]?.stopRequested) break;
 
-      const { url, title } = newThreads[i];
-      const pct = Math.round(((i + 1) / newThreads.length) * 100);
+      const thread = threads[i];
+      const pct = Math.round(((i + 1) / threads.length) * 100);
 
-      await setSessionProgress(platform, { current: i + 1, pct, title });
+      await setSessionProgress(platform, { current: i + 1, pct, title: thread.title || thread.url });
       chrome.action.setBadgeText({ text: `${pct}%` });
 
+      // Skip recently-captured duplicates WITHOUT navigating (fast path).
+      let fresh = true;
       try {
-        await navigateTab(tabId, url, 1500);
+        const savedAt = capturedPaths.get(new URL(thread.url).pathname);
+        fresh = savedAt === undefined || (now - savedAt) > RECAPTURE_AFTER_MS;
+      } catch { fresh = true; }
+      if (!fresh) { skipped++; continue; }
+
+      try {
+        await navigateTab(tabId, thread.url, 1500);
         await waitForContentScript(tabId);
 
         let captureResult = null;
@@ -200,9 +264,10 @@ async function scrapePlatform(platform, baseUrl) {
           savedCount++;
           if (captureResult?.synced) syncedCount++;
           await addToTotals(1, captureResult?.synced ? 1 : 0);
+          try { capturedPaths.set(new URL(thread.url).pathname, Date.now()); } catch {}
         } else {
           failedCount++;
-          console.warn(`[Brain Shadow] ${platform} capture failed for "${title}" after 3 attempts:`, captureResult);
+          console.warn(`[Brain Shadow] ${platform} capture failed for "${thread.title}" after 3 attempts:`, captureResult);
         }
 
       } catch (e) {
@@ -214,16 +279,20 @@ async function scrapePlatform(platform, baseUrl) {
     }
 
     await setSessionProgress(platform, {
-      running: false, done: true, pct: 100, savedCount, syncedCount, failedCount,
+      running: false, done: true, pct: 100, phase: 'done',
+      savedCount, syncedCount, failedCount, skipped,
+      discoveredTotal: threads.length,
       title: failedCount > 0
-        ? `Done — ${savedCount} saved · ${syncedCount} synced · ${failedCount} failed`
-        : `Done — ${savedCount} saved · ${syncedCount} synced`,
+        ? `Done — ${savedCount} saved · ${syncedCount} synced · ${failedCount} failed · ${skipped} skipped`
+        : `Done — ${savedCount} saved · ${syncedCount} synced${skipped ? ` · ${skipped} already had` : ''}`,
     });
 
   } catch (err) {
     console.error(`[Brain Shadow] ${platform} scrape failed:`, err.message);
     await setSessionProgress(platform, { running: false, done: true, title: `Error: ${err.message}` });
   } finally {
+    // Let the content script drop its discovery state before the tab closes
+    if (tabId) await tabMessage(tabId, { type: 'RESET_DISCOVERY' }).catch(() => {});
     if (tabId) chrome.tabs.remove(tabId).catch(() => {});
     activeSessions = Math.max(0, activeSessions - 1);
     stopKeepAlive();
@@ -250,6 +319,9 @@ async function scrapePlatform(platform, baseUrl) {
 // ── Save conversation ──────────────────────────────────────
 async function saveConversation(data, source = 'realtime') {
   try {
+    console.log(`[JWT-RUNTIME] ═══ saveConversation called (source=${source}) ═══`);
+    console.log(`[JWT-RUNTIME]   title:    ${(data?.title || '').slice(0, 60)}`);
+    console.log(`[JWT-RUNTIME]   platform: ${data?.platform || 'unknown'}`);
     const result        = await chrome.storage.local.get(STORAGE_KEY);
     const conversations = result[STORAGE_KEY] || {};
     const key           = `${data.platform}_${data.external_id}`;
@@ -278,14 +350,64 @@ async function saveConversation(data, source = 'realtime') {
 
 async function syncToBackend(data) {
   try {
-    const r          = await chrome.storage.local.get(BACKEND_KEY);
+    const r          = await chrome.storage.local.get([BACKEND_KEY, JWT_KEY]);
     const backendUrl = (r[BACKEND_KEY] || DEFAULT_BACKEND).replace(/\/$/, '');
-    const response   = await fetch(`${backendUrl}/api/import/capture`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    const token      = r[JWT_KEY];
+
+    // ── RUNTIME LOG: JWT value from storage ──
+    console.log(`[JWT-RUNTIME] ═══ syncToBackend START ═══`);
+    console.log(`[JWT-RUNTIME]   backendUrl:     ${backendUrl}`);
+    console.log(`[JWT-RUNTIME]   title:          ${(data?.title || '').slice(0, 60)}`);
+    console.log(`[JWT-RUNTIME]   platform:       ${data?.platform || 'unknown'}`);
+    console.log(`[JWT-RUNTIME]   token type:     ${typeof token}`);
+    console.log(`[JWT-RUNTIME]   token is null:  ${token === null}`);
+    console.log(`[JWT-RUNTIME]   token is undef: ${token === undefined}`);
+    console.log(`[JWT-RUNTIME]   token is empty: ${token === ''}`);
+    console.log(`[JWT-RUNTIME]   token length:   ${token?.length ?? 0}`);
+    console.log(`[JWT-RUNTIME]   token preview:  ${token ? token.slice(0, 40) + '...' : 'N/A'}`);
+    console.log(`[JWT-RUNTIME]   token full:     ${JSON.stringify(token)}`);
+
+    // ── Stack trace to identify caller ──
+    console.log(`[JWT-RUNTIME]   caller stack:   ${new Error().stack}`);
+
+    if (!token) {
+      console.warn(`[JWT-RUNTIME] ═══ BLOCKED: No token — sync aborted ═══`);
+      throw new Error('No authentication token found. Please log in to Brain Shadow first.');
+    }
+
+    // ── RUNTIME LOG: Complete headers object ──
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    };
+    console.log(`[JWT-RUNTIME] ═══ FETCH headers ═══`);
+    console.log(`[JWT-RUNTIME]   headers object: ${JSON.stringify(headers)}`);
+    console.log(`[JWT-RUNTIME]   Authorization:  ${headers['Authorization'] ? headers['Authorization'].slice(0, 50) + '...' : 'MISSING'}`);
+    console.log(`[JWT-RUNTIME]   Authorization length: ${headers['Authorization']?.length ?? 0}`);
+
+    const url = `${backendUrl}/api/import/capture`;
+    console.log(`[JWT-RUNTIME]   fetch URL:      ${url}`);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    console.log(`[JWT-RUNTIME] ═══ FETCH response ═══`);
+    console.log(`[JWT-RUNTIME]   status:   ${response.status} ${response.statusText}`);
+    console.log(`[JWT-RUNTIME]   ok:       ${response.ok}`);
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      console.error(`[JWT-RUNTIME]   response body: ${body.slice(0, 500)}`);
+      throw new Error(`HTTP ${response.status}`);
+    }
     return { ok: true };
   } catch (err) {
+    console.error(`[JWT-RUNTIME] ═══ syncToBackend FAILED ═══`);
+    console.error(`[JWT-RUNTIME]   error: ${err.message}`);
+    console.error(`[JWT-RUNTIME]   stack: ${err.stack}`);
     return { ok: false, error: err.message };
   }
 }
@@ -328,6 +450,64 @@ async function clearAllData() {
 
 // ── Message handler ────────────────────────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+  // Handle Token pairing from Web bridge
+  if (message.type === 'SET_JWT') {
+    const incomingToken = message.token;
+    const incomingType  = typeof incomingToken;
+    const incomingIsNull = incomingToken === null;
+    const incomingIsUndefined = incomingToken === undefined;
+    const incomingIsEmpty = incomingToken === '';
+    const incomingLength = incomingToken?.length ?? 0;
+    console.log(`[JWT-RUNTIME] ═══ SET_JWT received ═══`);
+    console.log(`[JWT-RUNTIME]   type:       ${incomingType}`);
+    console.log(`[JWT-RUNTIME]   is null:    ${incomingIsNull}`);
+    console.log(`[JWT-RUNTIME]   is undef:   ${incomingIsUndefined}`);
+    console.log(`[JWT-RUNTIME]   is empty:   ${incomingIsEmpty}`);
+    console.log(`[JWT-RUNTIME]   length:     ${incomingLength}`);
+    console.log(`[JWT-RUNTIME]   preview:    ${incomingToken ? incomingToken.slice(0, 40) + '...' : 'N/A'}`);
+    console.log(`[JWT-RUNTIME]   full value: ${JSON.stringify(incomingToken)}`);
+
+    chrome.storage.local.set({ [JWT_KEY]: incomingToken }).then(async () => {
+      // Immediately read back to verify what was actually stored
+      const verify = await chrome.storage.local.get(JWT_KEY);
+      const stored = verify[JWT_KEY];
+      console.log(`[JWT-RUNTIME] ═══ AFTER SET — verify readback ═══`);
+      console.log(`[JWT-RUNTIME]   stored type:    ${typeof stored}`);
+      console.log(`[JWT-RUNTIME]   stored is null: ${stored === null}`);
+      console.log(`[JWT-RUNTIME]   stored length:  ${stored?.length ?? 0}`);
+      console.log(`[JWT-RUNTIME]   stored preview: ${stored ? stored.slice(0, 40) + '...' : 'N/A'}`);
+      console.log(`[JWT-RUNTIME]   stored full:    ${JSON.stringify(stored)}`);
+      console.log(`[JWT-RUNTIME]   match:          ${stored === incomingToken}`);
+      sendResponse({ status: 'saved', stored });
+    });
+    return true;
+  }
+
+  if (message.type === 'GET_JWT') {
+    chrome.storage.local.get(JWT_KEY).then(result => {
+      const jwt = result[JWT_KEY] || null;
+      console.log(`[JWT-RUNTIME] ═══ GET_JWT requested ═══`);
+      console.log(`[JWT-RUNTIME]   has token: ${!!jwt}`);
+      console.log(`[JWT-RUNTIME]   type:      ${typeof jwt}`);
+      console.log(`[JWT-RUNTIME]   length:    ${jwt?.length ?? 0}`);
+      console.log(`[JWT-RUNTIME]   preview:   ${jwt ? jwt.slice(0, 40) + '...' : 'N/A'}`);
+      console.log(`[JWT-RUNTIME]   full:      ${JSON.stringify(jwt)}`);
+      sendResponse({ token: jwt });
+    });
+    return true;
+  }
+
+  // Live discovery heartbeat from the content script (Phase 1 progress +
+  // MV3 keep-alive during long discoveries). The poll loop in scrapePlatform
+  // is authoritative; this just mirrors the count sooner.
+  if (message.type === 'DISCOVERY_PROGRESS') {
+    setSessionProgress(message.platform, {
+      discovered: message.discovered || 0,
+      stalled: !!message.stalled,
+    }).then(() => sendResponse({ ok: true }));
+    return true;
+  }
 
   // Start scraping one platform (concurrent — doesn't block other platforms)
   if (message.type === 'START_PLATFORM_IMPORT') {
@@ -387,6 +567,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Sync ALL local conversations to backend (runs in SW — survives popup close)
   if (message.type === 'SYNC_ALL_TO_BACKEND') {
     (async () => {
+      console.log(`[JWT-RUNTIME] ═══ SYNC_ALL_TO_BACKEND triggered ═══`);
+      const jwtCheck = await chrome.storage.local.get(JWT_KEY);
+      console.log(`[JWT-RUNTIME]   JWT in storage at sync time: ${jwtCheck[JWT_KEY] ? 'YES (len=' + jwtCheck[JWT_KEY].length + ')' : 'NO'}`);
       const r          = await chrome.storage.local.get([STORAGE_KEY, BACKEND_KEY]);
       const convs      = Object.values(r[STORAGE_KEY] || {});
       const backendUrl = (r[BACKEND_KEY] || DEFAULT_BACKEND).replace(/\/$/, '');
@@ -400,7 +583,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.warn(`[Brain Shadow] Sync failed for "${conv.title}" (${conv.platform}):`, result.error);
         }
       }
-      console.log(`[Brain Shadow] SYNC_ALL_TO_BACKEND: ${synced}/${convs.length} synced, ${failed} failed`);
+      console.log(`[JWT-RUNTIME] ═══ SYNC_ALL_TO_BACKEND done: ${synced}/${convs.length} synced, ${failed} failed ═══`);
       sendResponse({ synced, failed, total: convs.length });
     })();
     return true;
@@ -422,18 +605,35 @@ chrome.storage.local.get(PROGRESS_KEY).then(r => {
 // On every SW startup: push all locally stored conversations to backend
 (async () => {
   try {
-    const r          = await chrome.storage.local.get([STORAGE_KEY, BACKEND_KEY]);
+    console.log(`[JWT-RUNTIME] ═══ STARTUP SYNC fired ═══`);
+    const r          = await chrome.storage.local.get([STORAGE_KEY, BACKEND_KEY, JWT_KEY]);
     const convs      = Object.values(r[STORAGE_KEY] || {});
-    if (!convs.length) return;
+    const jwtAtStartup = r[JWT_KEY];
+    console.log(`[JWT-RUNTIME]   conversations to sync: ${convs.length}`);
+    console.log(`[JWT-RUNTIME]   JWT at startup: ${jwtAtStartup ? 'PRESENT (len=' + jwtAtStartup.length + ')' : 'MISSING'}`);
+    console.log(`[JWT-RUNTIME]   JWT preview: ${jwtAtStartup ? jwtAtStartup.slice(0, 40) + '...' : 'N/A'}`);
+    if (!convs.length) {
+      console.log(`[JWT-RUNTIME]   No conversations — startup sync skipped`);
+      return;
+    }
     const backendUrl = (r[BACKEND_KEY] || DEFAULT_BACKEND).replace(/\/$/, '');
     // Test backend first
     const health = await fetch(`${backendUrl}/health`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
-    if (!health?.ok) return;
-    for (const conv of convs) {
-      await syncToBackend(conv).catch(() => {});
+    if (!health?.ok) {
+      console.log(`[JWT-RUNTIME]   Backend unreachable — startup sync aborted`);
+      return;
     }
-    console.log(`[Brain Shadow] Startup sync: pushed ${convs.length} conversations`);
-  } catch {}
+    let syncedCount = 0, failedCount = 0;
+    for (const conv of convs) {
+      console.log(`[JWT-RUNTIME]   Startup sync calling syncToBackend for "${(conv.title || '').slice(0, 40)}"`);
+      const result = await syncToBackend(conv).catch(() => ({ ok: false }));
+      if (result.ok) syncedCount++;
+      else failedCount++;
+    }
+    console.log(`[JWT-RUNTIME] ═══ STARTUP SYNC done: ${syncedCount}/${convs.length} synced, ${failedCount} failed ═══`);
+  } catch (err) {
+    console.error(`[JWT-RUNTIME]   Startup sync threw: ${err.message}`);
+  }
 })();
 
 console.log('[Brain Shadow] Universal background service worker started');

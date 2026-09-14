@@ -1,0 +1,2693 @@
+diff --git a/backend/backend/.env.example b/backend/backend/.env.example
+new file mode 100644
+index 0000000..e41f553
+--- /dev/null
++++ b/backend/backend/.env.example
+@@ -0,0 +1,18 @@
++NODE_ENV=development
++PORT=8000
++
++MONGODB_URI=mongodb://user:password@localhost:27017/brain-shadow?authSource=admin
++
++AI_PROVIDER=groq
++# Two separate Groq keys, one per workload, so each gets its own
++# 14,400 req/day quota instead of sharing one. Both fall back to
++# GROQ_API_KEY (single-key) if their specific var isn't set.
++GROQ_API_KEY_SUMMARY=your-groq-api-key-for-enrichment
++GROQ_API_KEY_CHAT=your-groq-api-key-for-search-chat
++# GROQ_API_KEY=your-groq-api-key
++CEREBRAS_API_KEY=your-cerebras-api-key
++BACKEND_API_KEY=change-this-secret
++LOG_LEVEL=info
++
++GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
++JWT_SECRET=generate-a-long-random-secret
+diff --git a/backend/backend/package.json b/backend/backend/package.json
+index e29144e..e7b315f 100644
+--- a/backend/backend/package.json
++++ b/backend/backend/package.json
+@@ -3,6 +3,9 @@
+   "version": "1.0.0",
+   "description": "",
+   "main": "index.js",
++  "engines": {
++    "node": ">=20.19.0"
++  },
+   "scripts": {
+     "test": "echo \"Error: no test specified\" && exit 1",
+     "start": "node src/server.js",
+diff --git a/backend/backend/src/app.js b/backend/backend/src/app.js
+index e813e70..bee6efb 100644
+--- a/backend/backend/src/app.js
++++ b/backend/backend/src/app.js
+@@ -13,29 +13,24 @@ const authRoutes         = require('./routes/auth.routes');
+ 
+ const app = express();
+ 
+-// Allow Next.js frontend, localhost, all Chrome extensions, and any deployed
+-// frontend origins listed in FRONTEND_URL (comma-separated, e.g. your Vercel URL)
+-const allowedOrigins = (process.env.FRONTEND_URL || '')
+-  .split(',')
+-  .map((o) => o.trim())
+-  .filter(Boolean);
+-
+-app.use(cors({
+-  origin: (origin, callback) => {
+-    if (
+-      !origin ||
+-      origin.startsWith('chrome-extension://') ||
+-      origin.startsWith('http://localhost') ||
+-      origin.startsWith('http://127.0.0.1') ||
+-      allowedOrigins.includes(origin)
+-    ) {
+-      callback(null, true);
+-    } else {
+-      callback(new Error('CORS: origin not allowed'));
+-    }
+-  },
+-  credentials: true,
+-}));
++// Allow the local Next.js frontend, localhost, and all Chrome extensions.
++app.use(
++  cors({
++    origin: (origin, callback) => {
++      if (
++        !origin ||
++        origin.startsWith('chrome-extension://') ||
++        origin.startsWith('http://localhost') ||
++        origin.startsWith('http://127.0.0.1')
++      ) {
++        callback(null, true);
++      } else {
++        callback(new Error('CORS: origin not allowed'));
++      }
++    },
++    credentials: true,
++  })
++);
+ app.use(express.json({ limit: '10mb' }));
+ app.use(cookieParser());
+ app.use(morgan('dev'));
+@@ -43,19 +38,7 @@ app.use(morgan('dev'));
+ // Log every incoming request so we can see if extension data arrives
+ app.use((req, res, next) => {
+   if (req.method === 'POST') {
+-    console.log(`\n[REQUEST] ═══════════════════════════════════════════════`);
+-    console.log(`[REQUEST] ${req.method} ${req.originalUrl}`);
+-    console.log(`[REQUEST] Origin: ${req.headers.origin || 'none'}`);
+-    console.log(`[REQUEST] Content-Type: ${req.headers['content-type'] || 'none'}`);
+-    console.log(`[REQUEST] X-API-KEY: ${req.headers['x-api-key'] ? 'PRESENT (' + req.headers['x-api-key'].substring(0, 10) + '...)' : 'MISSING'}`);
+-    console.log(`[REQUEST] User-Agent: ${(req.headers['user-agent'] || '').substring(0, 80)}`);
+-    console.log(`[REQUEST] Body size: ${JSON.stringify(req.body || {}).length} bytes`);
+-    console.log(`[REQUEST] Body keys: ${req.body ? Object.keys(req.body).join(', ') : 'EMPTY'}`);
+-    if (req.body?.platform) console.log(`[REQUEST] Platform: ${req.body.platform}`);
+-    if (req.body?.title) console.log(`[REQUEST] Title: ${(req.body.title || '').substring(0, 60)}`);
+-    if (req.body?.messages) console.log(`[REQUEST] Message count: ${(req.body.messages || []).length}`);
+-    if (req.body?.conversations) console.log(`[REQUEST] Bulk count: ${(req.body.conversations || []).length}`);
+-    console.log(`[REQUEST] ═══════════════════════════════════════════════`);
++    console.log(`[REQUEST] ${req.method} ${req.path} from ${req.headers.origin || 'unknown'}`);
+   }
+   next();
+ });
+diff --git a/backend/backend/src/config/db.js b/backend/backend/src/config/db.js
+index 5552533..c87d244 100644
+--- a/backend/backend/src/config/db.js
++++ b/backend/backend/src/config/db.js
+@@ -2,84 +2,25 @@ const mongoose = require('mongoose');
+ const logger = require('../utils/logger');
+ 
+ const connectDB = async () => {
+-  // ── DEBUG: Print the full connection config ──────────────────────
+-  const rawUri = process.env.MONGODB_URI || '';
+-  // Mask the password for safety but show everything else
+-  const maskedUri = rawUri.replace(/:([^@]+)@/, ':****@');
+-  console.log(`[DB DEBUG] MONGODB_URI (masked): ${maskedUri}`);
+-  console.log(`[DB DEBUG] URI length: ${rawUri.length}`);
+-
+-  // Parse the database name from the URI
+-  // MongoDB SRV URIs without a explicit DB name default to "test"
+-  let dbName = 'test'; // default when no DB in URI
+   try {
+-    const urlObj = new URL(rawUri);
+-    const pathDb = urlObj.pathname.replace('/', '');
+-    if (pathDb) {
+-      dbName = pathDb;
+-    } else {
+-      // Check for authSource (this is NOT the write database)
+-      const authSource = urlObj.searchParams.get('authSource');
+-      console.log(`[DB DEBUG] authSource from URI: ${authSource || 'none'}`);
+-      console.log(`[DB DEBUG] No explicit database in URI — will default to: "${dbName}"`);
+-      console.log(`[DB DEBUG] Data will be written to database: "${dbName}"`);
+-      console.log(`[DB DEBUG] IMPORTANT: In Atlas UI, look for database "${dbName}", NOT "${authSource || 'admin'}"`);
++    const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.DATABASE_URL;
++
++    if (!mongoUri) {
++      throw new Error('Missing MongoDB connection string. Set MONGODB_URI, MONGO_URL, or DATABASE_URL.');
+     }
+-  } catch (e) {
+-    console.log(`[DB DEBUG] Could not parse URI for DB name: ${e.message}`);
+-  }
+ 
+-  try {
+-    const conn = await mongoose.connect(process.env.MONGODB_URI, {
++    const conn = await mongoose.connect(mongoUri, {
+       serverSelectionTimeoutMS: 10000,
+       socketTimeoutMS: 60000,
+       heartbeatFrequencyMS: 10000,
+     });
++    logger.info(`MongoDB Connected: ${conn.connection.host}`);
+ 
+-    // ── DEBUG: Print actual connection details ─────────────────────
+-    const actualHost = conn.connection.host;
+-    const actualDb   = conn.connection.db?.databaseName || 'UNKNOWN';
+-    const actualPort = conn.connection.port;
+-    console.log(`[DB DEBUG] Connection established to: ${actualHost}:${actualPort}`);
+-    console.log(`[DB DEBUG] Actual database name after connect: "${actualDb}"`);
+-    console.log(`[DB DEBUG] Connection readyState: ${conn.connection.readyState} (1=connected)`);
+-    console.log(`[DB DEBUG] Mongoose version: ${mongoose.version}`);
+-
+-    // ── DEBUG: List existing databases (if possible) ───────────────
+-    try {
+-      const admin = conn.connection.db.admin();
+-      const dbList = await admin.listDatabases();
+-      console.log(`[DB DEBUG] Databases on cluster: ${dbList.databases.map(d => d.name).join(', ')}`);
+-    } catch (e) {
+-      console.log(`[DB DEBUG] Could not list databases (may lack admin privileges): ${e.message}`);
+-    }
+-
+-    // ── DEBUG: Check if conversations collection exists ────────────
+-    const collections = await conn.connection.db.listCollections().toArray();
+-    console.log(`[DB DEBUG] Existing collections in "${actualDb}": ${collections.length === 0 ? 'NONE (fresh database)' : collections.map(c => c.name).join(', ')}`);
+-
+-    // ── DEBUG: Test a write operation ──────────────────────────────
+-    try {
+-      const testResult = await conn.connection.db.collection('_debug_health').insertOne({
+-        _test: true,
+-        timestamp: new Date(),
+-        database: actualDb,
+-        purpose: 'connectivity-check'
+-      });
+-      console.log(`[DB DEBUG] Test write succeeded! Inserted _id: ${testResult.insertedId}`);
+-      console.log(`[DB DEBUG] This confirms writes to Atlas work on database "${actualDb}"`);
+-
+-      // Clean up test document
+-      await conn.connection.db.collection('_debug_health').deleteOne({ _test: true });
+-      console.log(`[DB DEBUG] Test document cleaned up`);
+-    } catch (writeErr) {
+-      console.error(`[DB DEBUG] !!! TEST WRITE FAILED !!!`);
+-      console.error(`[DB DEBUG] Error: ${writeErr.message}`);
+-      console.error(`[DB DEBUG] Full error: ${writeErr.stack}`);
+-    }
+-
+-    // ── Migration: Fix legacy externalId-only unique index ─────────
+-    const collectionExists = collections.some(c => c.name === 'conversations');
++    // Migrate the original ChatGPT-only uniqueness rule. Conversation IDs are
++    // provider-scoped, so two platforms may safely use the same external ID.
++    const collectionExists = await conn.connection.db
++      .listCollections({ name: 'conversations' }, { nameOnly: true })
++      .hasNext();
+     if (collectionExists) {
+       const conversations = conn.connection.collection('conversations');
+       const indexes = await conversations.indexes();
+@@ -96,13 +37,8 @@ const connectDB = async () => {
+         { platform: 1, externalId: 1 },
+         { unique: true, name: 'platform_1_externalId_1' }
+       );
+-      console.log(`[DB DEBUG] Index migration completed`);
+-    } else {
+-      console.log(`[DB DEBUG] No conversations collection yet — will be created on first insert`);
+     }
+ 
+-    logger.info(`MongoDB Connected: ${actualHost} | Database: "${actualDb}"`);
+-
+     mongoose.connection.on('disconnected', () => {
+       logger.warn('MongoDB disconnected — will auto-reconnect');
+     });
+@@ -113,9 +49,6 @@ const connectDB = async () => {
+       logger.error(`MongoDB error: ${err.message}`);
+     });
+   } catch (error) {
+-    console.error(`[DB DEBUG] !!! CONNECTION FAILED !!!`);
+-    console.error(`[DB DEBUG] Error: ${error.message}`);
+-    console.error(`[DB DEBUG] Full stack: ${error.stack}`);
+     logger.error(`Error connecting to MongoDB: ${error.message}`);
+     process.exit(1);
+   }
+diff --git a/backend/backend/src/config/groq.js b/backend/backend/src/config/groq.js
+index aba0615..6c4f8e6 100644
+--- a/backend/backend/src/config/groq.js
++++ b/backend/backend/src/config/groq.js
+@@ -1,5 +1,10 @@
+ module.exports = {
+-  apiKey:  process.env.GROQ_API_KEY,
++  // Two separate Groq keys split by workload so summarization (enrichment)
++  // and search-answer generation (chat) each get their own 14,400 req/day
++  // quota instead of sharing one. Both fall back to GROQ_API_KEY if their
++  // specific var isn't set, so a single-key setup keeps working unchanged.
++  apiKeySummary: process.env.GROQ_API_KEY_SUMMARY || process.env.GROQ_API_KEY,
++  apiKeyChat:    process.env.GROQ_API_KEY_CHAT    || process.env.GROQ_API_KEY,
+   baseUrl: 'https://api.groq.com/openai/v1',
+   model:   process.env.GROQ_MODEL || 'llama-3.1-8b-instant',
+ };
+diff --git a/backend/backend/src/controllers/conversation.controller.js b/backend/backend/src/controllers/conversation.controller.js
+index 1423d7e..15bd2e1 100644
+--- a/backend/backend/src/controllers/conversation.controller.js
++++ b/backend/backend/src/controllers/conversation.controller.js
+@@ -4,114 +4,66 @@ const groqService = require('../services/groq.service');
+ const logger = require('../utils/logger');
+ 
+ const createConversation = async (req, res, next) => {
+-  const startTime = Date.now();
+   try {
+-    console.log(`\n[CONTROLLER] ─── createConversation START ───`);
+-    console.log(`[CONTROLLER] Timestamp: ${new Date().toISOString()}`);
+-    console.log(`[CONTROLLER] Body keys: ${Object.keys(req.body || {}).join(', ')}`);
++    logger.info('DEBUG: [REQUEST RECEIVED] POST /api/conversations');
++    logger.debug('DEBUG: Body:', JSON.stringify(req.body, null, 2));
+ 
+     if (!req.body || Object.keys(req.body).length === 0) {
+-      console.warn(`[CONTROLLER] Empty request body — returning 400`);
++      logger.warn('DEBUG: Empty request body received');
+       return res.status(400).json({ message: 'Empty request body' });
+     }
+ 
+-    const { platform, external_id, title, messages } = req.body;
+-    console.log(`[CONTROLLER] platform: "${platform}"`);
+-    console.log(`[CONTROLLER] external_id: "${external_id}"`);
+-    console.log(`[CONTROLLER] title: "${(title || '').substring(0, 60)}"`);
+-    console.log(`[CONTROLLER] messages count: ${(messages || []).length}`);
+-
+-    // Validate platform enum before hitting the service
+-    const VALID_PLATFORMS = ['chatgpt', 'claude', 'gemini', 'deepseek', 'blackbox', 'copilot', 'mscopilot', 'perplexity', 'grok'];
+-    const normalizedPlatform = platform ? platform.toLowerCase() : 'chatgpt';
+-    if (!VALID_PLATFORMS.includes(normalizedPlatform)) {
+-      console.error(`[CONTROLLER] INVALID PLATFORM: "${platform}" → normalized "${normalizedPlatform}"`);
+-      console.error(`[CONTROLLER] Valid platforms: ${VALID_PLATFORMS.join(', ')}`);
+-      return res.status(400).json({
+-        message: `Invalid platform: "${platform}". Valid: ${VALID_PLATFORMS.join(', ')}`
+-      });
+-    }
+-
+-    console.log(`[CONTROLLER] Calling conversationService.createOrUpdate...`);
+     const conversation = await conversationService.createOrUpdate(req.body);
+-    console.log(`[CONTROLLER] Service returned: _id=${conversation._id}, platform=${conversation.platform}, status=${conversation.status}`);
+-    console.log(`[CONTROLLER] Messages stored: ${conversation.messages?.length}`);
+-    console.log(`[CONTROLLER] DB write confirmed in ${Date.now() - startTime}ms`);
++    logger.info(`[CAPTURE] ${conversation.platform} | "${conversation.title?.slice(0,50)}" | ${conversation.messages?.length} msgs | status: ${conversation.status}`);
+     
+     // Trigger enrichment immediately (no queue)
+     setImmediate(() => {
+-      console.log(`[CONTROLLER] Triggering enrichment for ${conversation._id}`);
++      logger.info(`DEBUG: [ENRICHMENT TRIGGERED] for ${conversation._id}`);
+       enrichmentService.process(conversation._id).catch(err => {
+-        console.error(`[CONTROLLER] Background enrichment failed for ${conversation._id}: ${err.message}`);
+-        console.error(`[CONTROLLER] Enrichment error stack: ${err.stack}`);
++        logger.error(`DEBUG: Background enrichment failed for ${conversation._id}: ${err.message}`);
+       });
+     });
+ 
+-    const responseBody = {
++    res.status(202).json({
+       message: 'Conversation received and enrichment started',
+       id: conversation._id,
+       status: 'PENDING'
+-    };
+-    console.log(`[CONTROLLER] Sending 202 response: ${JSON.stringify(responseBody)}`);
+-    console.log(`[CONTROLLER] ─── createConversation END (success) ───\n`);
+-    res.status(202).json(responseBody);
++    });
+   } catch (error) {
+-    console.error(`[CONTROLLER] ─── createConversation ERROR ───`);
+-    console.error(`[CONTROLLER] Error message: ${error.message}`);
+-    console.error(`[CONTROLLER] Error name: ${error.name}`);
+-    console.error(`[CONTROLLER] Error stack: ${error.stack}`);
+-    if (error.errors) {
+-      console.error(`[CONTROLLER] Validation errors:`, JSON.stringify(error.errors, null, 2));
+-    }
++    logger.error(`DEBUG: [CONTROLLER ERROR] ${error.message}`);
+     next(error);
+   }
+ };
+ 
+ const bulkCreateConversations = async (req, res, next) => {
+-  const startTime = Date.now();
+   try {
+-    console.log(`\n[CONTROLLER] ─── bulkCreateConversations START ───`);
++    logger.info(`DEBUG: [REQUEST RECEIVED] POST /api/conversations/bulk - Count: ${req.body.conversations?.length}`);
+     const { conversations } = req.body;
+-    console.log(`[CONTROLLER] Bulk payload: ${Array.isArray(conversations) ? conversations.length + ' items' : 'NOT AN ARRAY'}`);
+-    
+     if (!Array.isArray(conversations)) {
+-      console.error(`[CONTROLLER] conversations is not an array: ${typeof conversations}`);
+       return res.status(400).json({ message: 'conversations must be an array' });
+     }
+ 
+     const results = [];
+-    const errors = [];
+-    for (let i = 0; i < conversations.length; i++) {
+-      const convoData = conversations[i];
+-      console.log(`[CONTROLLER] Bulk item ${i + 1}/${conversations.length}: platform="${convoData.platform}", external_id="${convoData.external_id}", title="${(convoData.title || '').substring(0, 40)}"`);
+-      try {
+-        const convo = await conversationService.createOrUpdate(convoData);
+-        console.log(`[CONTROLLER] Bulk item ${i + 1} OK: _id=${convo._id}`);
+-        
+-        setImmediate(() => {
+-          enrichmentService.process(convo._id).catch(err => {
+-            console.error(`[CONTROLLER] Bulk enrichment failed for ${convo._id}: ${err.message}`);
+-          });
++    for (const convoData of conversations) {
++      const convo = await conversationService.createOrUpdate(convoData);
++      logger.info(`DEBUG: [CONTROLLER] Bulk item processed: ${convo._id}`);
++      
++      // Trigger enrichment immediately
++      setImmediate(() => {
++        logger.info(`DEBUG: [ENRICHMENT TRIGGERED] for ${convo._id}`);
++        enrichmentService.process(convo._id).catch(err => {
++          logger.error(`DEBUG: Background enrichment failed for ${convo._id}: ${err.message}`);
+         });
+-        results.push(convo._id);
+-      } catch (itemError) {
+-        console.error(`[CONTROLLER] Bulk item ${i + 1} FAILED: ${itemError.message}`);
+-        console.error(`[CONTROLLER] Item error stack: ${itemError.stack}`);
+-        errors.push({ index: i, error: itemError.message, platform: convoData.platform });
+-      }
++      });
++      results.push(convo._id);
+     }
+ 
+-    console.log(`[CONTROLLER] Bulk complete: ${results.length} success, ${errors.length} failed, ${Date.now() - startTime}ms`);
+-    console.log(`[CONTROLLER] ─── bulkCreateConversations END ───\n`);
+     res.status(202).json({
+       message: `Received ${results.length} conversations, enrichment started`,
+-      ids: results,
+-      errors: errors.length > 0 ? errors : undefined
++      ids: results
+     });
+   } catch (error) {
+-    console.error(`[CONTROLLER] ─── bulkCreateConversations ERROR ───`);
+-    console.error(`[CONTROLLER] Error: ${error.message}`);
+-    console.error(`[CONTROLLER] Stack: ${error.stack}`);
++    logger.error(`DEBUG: [CONTROLLER ERROR] ${error.message}`);
+     next(error);
+   }
+ };
+diff --git a/backend/backend/src/controllers/health.controller.js b/backend/backend/src/controllers/health.controller.js
+index c521312..ddf2773 100644
+--- a/backend/backend/src/controllers/health.controller.js
++++ b/backend/backend/src/controllers/health.controller.js
+@@ -1,5 +1,3 @@
+-const mongoose = require('mongoose');
+-
+ const getHealth = (req, res) => {
+   res.json({
+     status: 'OK',
+@@ -9,53 +7,6 @@ const getHealth = (req, res) => {
+   });
+ };
+ 
+-const getDebug = async (req, res) => {
+-  try {
+-    const conn = mongoose.connection;
+-    const info = {
+-      mongooseVersion: mongoose.version,
+-      connectionState: conn.readyState, // 0=disconnected, 1=connected, 2=connecting, 3=disconnecting
+-      connectionStateText: ['disconnected', 'connected', 'connecting', 'disconnecting'][conn.readyState] || 'unknown',
+-      host: conn.host,
+-      port: conn.port,
+-      databaseName: conn.db?.databaseName || 'N/A',
+-      collections: [],
+-      testWrite: null,
+-    };
+-
+-    if (conn.readyState === 1 && conn.db) {
+-      // List collections
+-      const colls = await conn.db.listCollections().toArray();
+-      info.collections = colls.map(c => ({ name: c.name, type: c.type }));
+-
+-      // Count documents in conversations
+-      try {
+-        const count = await conn.db.collection('conversations').countDocuments();
+-        info.conversationCount = count;
+-      } catch (e) {
+-        info.conversationCountError = e.message;
+-      }
+-
+-      // Test write
+-      try {
+-        const result = await conn.db.collection('_debug_health').insertOne({
+-          _test: true,
+-          timestamp: new Date()
+-        });
+-        await conn.db.collection('_debug_health').deleteOne({ _id: result.insertedId });
+-        info.testWrite = 'SUCCESS';
+-      } catch (e) {
+-        info.testWrite = `FAILED: ${e.message}`;
+-      }
+-    }
+-
+-    res.json(info);
+-  } catch (error) {
+-    res.status(500).json({ error: error.message, stack: error.stack });
+-  }
+-};
+-
+ module.exports = {
+-  getHealth,
+-  getDebug
++  getHealth
+ };
+diff --git a/backend/backend/src/middleware/auth.middleware.js b/backend/backend/src/middleware/auth.middleware.js
+index ff5293c..2ca22d9 100644
+--- a/backend/backend/src/middleware/auth.middleware.js
++++ b/backend/backend/src/middleware/auth.middleware.js
+@@ -4,37 +4,26 @@ const logger = require('../utils/logger');
+ const authMiddleware = async (req, res, next) => {
+   const apiKey = req.header('X-API-KEY');
+ 
+-  console.log(`[AUTH] Request to ${req.method} ${req.originalUrl}`);
+-  console.log(`[AUTH] X-API-KEY header: ${apiKey ? 'PRESENT (starts with: ' + apiKey.substring(0, 8) + '...)' : 'MISSING'}`);
+-  console.log(`[AUTH] BACKEND_API_KEY env: ${process.env.BACKEND_API_KEY ? 'PRESENT (starts with: ' + process.env.BACKEND_API_KEY.substring(0, 8) + '...)' : 'MISSING'}`);
+-
+   if (!apiKey) {
+-    console.warn(`[AUTH] No API key provided — returning 401`);
+     return res.status(401).json({ message: 'No API Key provided' });
+   }
+ 
+   // Check against static env key for extension or DB keys
+   if (apiKey === process.env.BACKEND_API_KEY) {
+-    console.log(`[AUTH] API key matches BACKEND_API_KEY — allowed`);
+     return next();
+   }
+ 
+-  console.warn(`[AUTH] API key does NOT match BACKEND_API_KEY — checking database`);
+-
+   try {
+     const keyRecord = await ApiKey.findOne({ key: apiKey, active: true });
+     if (!keyRecord) {
+-      console.warn(`[AUTH] No matching active API key in DB — returning 401`);
+       return res.status(401).json({ message: 'Invalid or inactive API Key' });
+     }
+ 
+-    console.log(`[AUTH] Found matching API key in DB — allowing`);
+     keyRecord.lastUsedAt = new Date();
+     await keyRecord.save();
+     next();
+   } catch (error) {
+-    console.error(`[AUTH] Auth middleware error: ${error.message}`);
+-    console.error(`[AUTH] Error stack: ${error.stack}`);
++    logger.error(`Auth middleware error: ${error.message}`);
+     res.status(500).json({ message: 'Server auth error' });
+   }
+ };
+diff --git a/backend/backend/src/middleware/error.middleware.js b/backend/backend/src/middleware/error.middleware.js
+index ddc580e..b801230 100644
+--- a/backend/backend/src/middleware/error.middleware.js
++++ b/backend/backend/src/middleware/error.middleware.js
+@@ -1,21 +1,6 @@
+ const logger = require('../utils/logger');
+ 
+ const errorHandler = (err, req, res, next) => {
+-  console.error(`\n[ERROR HANDLER] ═══════════════════════════════════════`);
+-  console.error(`[ERROR HANDLER] Route: ${req.method} ${req.originalUrl}`);
+-  console.error(`[ERROR HANDLER] Error name: ${err.name}`);
+-  console.error(`[ERROR HANDLER] Error message: ${err.message}`);
+-  console.error(`[ERROR HANDLER] Error code: ${err.code || 'N/A'}`);
+-  console.error(`[ERROR HANDLER] Full stack trace:`);
+-  console.error(err.stack);
+-  if (err.errors) {
+-    console.error(`[ERROR HANDLER] Mongoose validation errors:`);
+-    for (const [field, e] of Object.entries(err.errors)) {
+-      console.error(`[ERROR HANDLER]   - ${field}: ${e.message} (kind: ${e.kind}, value: ${JSON.stringify(e.value)?.substring(0, 100)})`);
+-    }
+-  }
+-  console.error(`[ERROR HANDLER] ═══════════════════════════════════════\n`);
+-
+   logger.error(err.stack);
+ 
+   const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
+diff --git a/backend/backend/src/models/conversation.model.js b/backend/backend/src/models/conversation.model.js
+index 129d1da..e2f58c6 100644
+--- a/backend/backend/src/models/conversation.model.js
++++ b/backend/backend/src/models/conversation.model.js
+@@ -15,8 +15,6 @@ const conversationSchema = new mongoose.Schema(
+         'deepseek', 'blackbox', 'copilot', 'mscopilot',
+         'perplexity', 'grok',
+       ],
+-      lowercase: true,
+-      trim: true,
+     },
+     title: {
+       type: String,
+@@ -44,6 +42,10 @@ const conversationSchema = new mongoose.Schema(
+       importanceScore: Number,
+       enrichedAt: Date,
+       version: String,
++      // messages.length at the time enrichment ran. Lets us tell a genuinely
++      // up-to-date summary apart from one that's stale because the
++      // conversation grew after it was last enriched.
++      messageCountAtEnrichment: Number,
+     },
+     error: {
+       type: String,
+diff --git a/backend/backend/src/routes/health.routes.js b/backend/backend/src/routes/health.routes.js
+index 45b2b7c..fc0f56e 100644
+--- a/backend/backend/src/routes/health.routes.js
++++ b/backend/backend/src/routes/health.routes.js
+@@ -3,6 +3,5 @@ const router = express.Router();
+ const healthController = require('../controllers/health.controller');
+ 
+ router.get('/', healthController.getHealth);
+-router.get('/debug', healthController.getDebug);
+ 
+ module.exports = router;
+diff --git a/backend/backend/src/server.js b/backend/backend/src/server.js
+index 09d7fec..43d23b5 100644
+--- a/backend/backend/src/server.js
++++ b/backend/backend/src/server.js
+@@ -6,54 +6,22 @@ const enrichment = require('./services/enrichment.service');
+ 
+ const PORT = process.env.PORT || 8000;
+ 
+-// ── DEBUG: Print all environment variables (mask secrets) ────────
+-console.log(`\n[SERVER] ═══════════════════════════════════════════════`);
+-console.log(`[SERVER] Brain Shadow Backend — Starting up`);
+-console.log(`[SERVER] Timestamp: ${new Date().toISOString()}`);
+-console.log(`[SERVER] Node.js version: ${process.version}`);
+-console.log(`[SERVER] NODE_ENV: ${process.env.NODE_ENV}`);
+-console.log(`[SERVER] PORT: ${PORT}`);
+-console.log(`[SERVER] MONGODB_URI present: ${!!process.env.MONGODB_URI}`);
+-console.log(`[SERVER] MONGODB_URI length: ${(process.env.MONGODB_URI || '').length}`);
+-if (process.env.MONGODB_URI) {
+-  const masked = process.env.MONGODB_URI.replace(/:([^@]+)@/, ':****@');
+-  console.log(`[SERVER] MONGODB_URI (masked): ${masked}`);
+-}
+-console.log(`[SERVER] GROQ_API_KEY present: ${!!process.env.GROQ_API_KEY}`);
+-console.log(`[SERVER] CEREBRAS_API_KEY present: ${!!process.env.CEREBRAS_API_KEY}`);
+-console.log(`[SERVER] BACKEND_API_KEY present: ${!!process.env.BACKEND_API_KEY}`);
+-console.log(`[SERVER] ═══════════════════════════════════════════════\n`);
+-
+ // Last line of defense: an uncaught rejection anywhere (e.g. a transient
+ // MongoDB pool error surfacing from the driver's internal event handlers,
+ // outside any of our try/catch blocks) used to crash the whole process —
+ // silently taking down the API with no auto-restart. Log it instead.
+ process.on('unhandledRejection', (reason) => {
+-  console.error(`[UNHANDLED REJECTION] ${reason instanceof Error ? reason.stack : reason}`);
+   logger.error(`[UNHANDLED REJECTION] ${reason instanceof Error ? reason.stack : reason}`);
+ });
+ 
+-process.on('uncaughtException', (err) => {
+-  console.error(`[UNCAUGHT EXCEPTION] ${err.stack}`);
+-  logger.error(`[UNCAUGHT EXCEPTION] ${err.stack}`);
+-});
+-
+ const retryPendingSafely = () => {
+   enrichment.retryPending().catch((err) => {
+-    console.error(`[RETRY] retryPending() failed: ${err.message}`);
+     logger.error(`[RETRY] retryPending() failed: ${err.message}`);
+   });
+ };
+ 
+ connectDB().then(() => {
+   app.listen(PORT, () => {
+-    console.log(`\n[SERVER] ═══════════════════════════════════════════════`);
+-    console.log(`[SERVER] Server listening on port ${PORT}`);
+-    console.log(`[SERVER] Environment: ${process.env.NODE_ENV}`);
+-    console.log(`[SERVER] Health check: http://localhost:${PORT}/health`);
+-    console.log(`[SERVER] Import endpoint: http://localhost:${PORT}/api/import/capture`);
+-    console.log(`[SERVER] Conversations endpoint: http://localhost:${PORT}/api/conversations`);
+-    console.log(`[SERVER] ═══════════════════════════════════════════════\n`);
+     logger.info(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
+ 
+     // On startup: reset all FAILED → PENDING and enrich them
+diff --git a/backend/backend/src/services/conversation.service.js b/backend/backend/src/services/conversation.service.js
+index 12c5494..99482a1 100644
+--- a/backend/backend/src/services/conversation.service.js
++++ b/backend/backend/src/services/conversation.service.js
+@@ -3,18 +3,11 @@ const logger = require('../utils/logger');
+ 
+ class ConversationService {
+   async createOrUpdate(data) {
+-    const startTime = Date.now();
+     const { platform, external_id, title, messages, saved_at, captured_at, url } = data;
+ 
+-    console.log(`\n[SERVICE] ─── createOrUpdate START ───`);
+-    console.log(`[SERVICE] Input platform: "${platform}"`);
+-    console.log(`[SERVICE] Input external_id: "${external_id}"`);
+-    console.log(`[SERVICE] Input title: "${(title || '').substring(0, 60)}"`);
+-    console.log(`[SERVICE] Input messages: ${(messages || []).length} items`);
+-    console.log(`[SERVICE] Input url: "${(url || '').substring(0, 80)}"`);
++    logger.info(`DEBUG: [BEFORE DB SAVE] ExternalId: ${external_id}, Platform: ${platform}`);
+ 
+     const normalizedPlatform = platform ? platform.toLowerCase() : 'chatgpt';
+-    console.log(`[SERVICE] Normalized platform: "${normalizedPlatform}"`);
+ 
+     const newMessages = (messages || []).map(m => ({
+       role: m.role,
+@@ -22,8 +15,10 @@ class ConversationService {
+       timestamp: m.timestamp || new Date().toISOString()
+     }));
+ 
++    // Only overwrite existing messages if the new capture has actual content.
++    // Re-imports that fire while the page is still loading can send empty content
++    // and would otherwise destroy the previously captured text.
+     const newHasContent = newMessages.some(m => (m.content || '').trim().length > 0);
+-    console.log(`[SERVICE] Messages with content: ${newHasContent}`);
+ 
+     const conversationData = {
+       externalId: external_id,
+@@ -36,6 +31,7 @@ class ConversationService {
+       }
+     };
+ 
++    // messages must appear in $set OR $setOnInsert — never both (MongoDB rejects that)
+     if (newHasContent) {
+       conversationData.messages = newMessages;
+     }
+@@ -45,74 +41,19 @@ class ConversationService {
+       setOnInsert.messages = newMessages;
+     }
+ 
+-    const filter = { externalId: external_id, platform: normalizedPlatform };
+-    console.log(`[SERVICE] MongoDB filter: ${JSON.stringify(filter)}`);
+-    console.log(`[SERVICE] MongoDB $set keys: ${Object.keys(conversationData).join(', ')}`);
+-    console.log(`[SERVICE] MongoDB upsert: true, runValidators: true`);
+-
+     try {
+-      console.log(`[SERVICE] Executing Conversation.findOneAndUpdate...`);
+       const result = await Conversation.findOneAndUpdate(
+-        filter,
++        { externalId: external_id, platform: normalizedPlatform },
+         {
+           $set: conversationData,
+           $setOnInsert: setOnInsert,
+         },
+         { upsert: true, returnDocument: 'after', runValidators: true }
+       );
+-
+-      // ── DEBUG: Confirm the write ────────────────────────────────
+-      console.log(`[SERVICE] findOneAndUpdate returned: ${result ? 'DOCUMENT' : 'NULL'}`);
+-      if (result) {
+-        console.log(`[SERVICE] Result _id: ${result._id}`);
+-        console.log(`[SERVICE] Result platform: ${result.platform}`);
+-        console.log(`[SERVICE] Result externalId: ${result.externalId}`);
+-        console.log(`[SERVICE] Result status: ${result.status}`);
+-        console.log(`[SERVICE] Result messages count: ${result.messages?.length}`);
+-        console.log(`[SERVICE] Result createdAt: ${result.createdAt}`);
+-        console.log(`[SERVICE] Result updatedAt: ${result.updatedAt}`);
+-      } else {
+-        console.error(`[SERVICE] !!! findOneAndUpdate returned NULL — write may have failed !!!`);
+-      }
+-
+-      // ── DEBUG: Verify by reading back ───────────────────────────
+-      try {
+-        const verify = await Conversation.findOne(filter).lean();
+-        if (verify) {
+-          console.log(`[SERVICE] VERIFY READ-BACK: Document EXISTS in DB (_id=${verify._id})`);
+-        } else {
+-          console.error(`[SERVICE] !!! VERIFY READ-BACK: Document NOT FOUND in DB !!!`);
+-          console.error(`[SERVICE] This means the upsert did NOT persist to Atlas`);
+-        }
+-      } catch (verifyErr) {
+-        console.error(`[SERVICE] VERIFY READ-BACK failed: ${verifyErr.message}`);
+-      }
+-
+-      console.log(`[SERVICE] DB operation completed in ${Date.now() - startTime}ms`);
+-      console.log(`[SERVICE] ─── createOrUpdate END (success) ───\n`);
++      logger.info(`DEBUG: [AFTER DB SAVE SUCCESS] Doc ID: ${result._id}`);
+       return result;
+     } catch (error) {
+-      console.error(`[SERVICE] ─── createOrUpdate DB ERROR ───`);
+-      console.error(`[SERVICE] Error name: ${error.name}`);
+-      console.error(`[SERVICE] Error message: ${error.message}`);
+-      console.error(`[SERVICE] Error code: ${error.code}`);
+-      console.error(`[SERVICE] Error stack: ${error.stack}`);
+-      if (error.errors) {
+-        console.error(`[SERVICE] Mongoose validation errors:`);
+-        for (const [field, err] of Object.entries(error.errors)) {
+-          console.error(`[SERVICE]   - ${field}: ${err.message} (kind: ${err.kind})`);
+-        }
+-      }
+-      if (error.code) {
+-        console.error(`[SERVICE] MongoDB error code ${error.code} means: ${
+-          error.code === 11000 ? 'DUPLICATE KEY' :
+-          error.code === 121 ? 'VALIDATION FAILED' :
+-          error.code === 13 ? 'UNAUTHORIZED' :
+-          error.code === 20 ? 'BAD_COMMAND' :
+-          'UNKNOWN'
+-        }`);
+-      }
+-      console.error(`[SERVICE] ─── createOrUpdate END (error) ───\n`);
++      logger.error(`DEBUG: [DB SAVE ERROR] ${error.message}`);
+       throw error;
+     }
+   }
+@@ -126,23 +67,21 @@ class ConversationService {
+   }
+ 
+   async updateStatus(id, status, error = null) {
+-    console.log(`[SERVICE] updateStatus: id=${id}, status=${status}, error=${error}`);
+     const update = { status };
+     if (error === null) {
+       update.error = null;
+     } else if (error) {
+       update.error = error;
+     }
+-    const result = await Conversation.findByIdAndUpdate(id, { $set: update }, { returnDocument: 'after' });
+-    console.log(`[SERVICE] updateStatus result: ${result ? 'OK' : 'NULL (doc not found)'}`);
+-    return result;
++    return await Conversation.findByIdAndUpdate(id, { $set: update }, { returnDocument: 'after' });
+   }
+ 
+   async updateEnrichment(id, enrichment) {
+-    console.log(`[SERVICE] ─── updateEnrichment START for ${id} ───`);
++    logger.info(`DEBUG: [BEFORE METADATA SAVE] for ${id}`);
+ 
+     const updateData = {
+       status: 'COMPLETED',
++      // Populate the enrichment subdocument (camelCase field names per schema)
+       'enrichment.topic':           enrichment.topic,
+       'enrichment.category':        enrichment.category,
+       'enrichment.summary':         enrichment.summary,
+@@ -151,6 +90,8 @@ class ConversationService {
+       'enrichment.importanceScore': enrichment.importance_score,
+       'enrichment.enrichedAt':      enrichment.enriched_at,
+       'enrichment.version':         enrichment.enrichment_version,
++      'enrichment.messageCountAtEnrichment': enrichment.message_count,
++      // Also write to metadata (snake_case) for backward compat
+       'metadata.topic':               enrichment.topic,
+       'metadata.category':            enrichment.category,
+       'metadata.summary':             enrichment.summary,
+@@ -163,40 +104,22 @@ class ConversationService {
+       error: null,
+     };
+ 
+-    console.log(`[SERVICE] Enrichment topic: "${enrichment.topic}"`);
+-    console.log(`[SERVICE] Enrichment version: "${enrichment.enrichment_version}"`);
++    const result = await Conversation.findByIdAndUpdate(
++      id,
++      { $set: updateData },
++      { returnDocument: 'after' }
++    );
+ 
+-    try {
+-      const result = await Conversation.findByIdAndUpdate(
+-        id,
+-        { $set: updateData },
+-        { returnDocument: 'after' }
+-      );
+-
+-      if (result) {
+-        console.log(`[SERVICE] Enrichment saved: status=${result.status}, topic=${result.enrichment?.topic}`);
+-      } else {
+-        console.error(`[SERVICE] !!! Enrichment update returned NULL — doc not found for id: ${id} !!!`);
+-      }
+-
+-      console.log(`[SERVICE] ─── updateEnrichment END ───`);
+-      return result;
+-    } catch (error) {
+-      console.error(`[SERVICE] Enrichment save FAILED: ${error.message}`);
+-      console.error(`[SERVICE] Enrichment error stack: ${error.stack}`);
+-      throw error;
+-    }
++    logger.info(`DEBUG: [AFTER METADATA SAVE] for ${id}`);
++    return result;
+   }
+ 
+   async list(query = {}, options = {}) {
+     const { limit = 20, page = 1, sort = { createdAt: -1 } } = options;
+-    console.log(`[SERVICE] list() query: ${JSON.stringify(query)}, page: ${page}, limit: ${limit}`);
+-    const results = await Conversation.find(query)
++    return await Conversation.find(query)
+       .sort(sort)
+       .limit(limit)
+       .skip((page - 1) * limit);
+-    console.log(`[SERVICE] list() returned ${results.length} results`);
+-    return results;
+   }
+ }
+ 
+diff --git a/backend/backend/src/services/enrichment.service.js b/backend/backend/src/services/enrichment.service.js
+index fdd3f2e..a5788a9 100644
+--- a/backend/backend/src/services/enrichment.service.js
++++ b/backend/backend/src/services/enrichment.service.js
+@@ -13,8 +13,14 @@ const cerebrasClient = process.env.CEREBRAS_API_KEY
+     })
+   : null;
+ 
+-// qwen-3-32b: high-quality, ~14,400 req/day free on Cerebras
+-const CEREBRAS_MODEL = 'qwen-3-32b';
++// qwen-3-32b was deprecated/removed from Cerebras (every request 404'd —
++// confirmed via /v1/models, it's no longer in their catalog). Their other
++// two current models (gpt-oss-120b, zai-glm-4.7) are reasoning models that
++// spend the token budget on hidden "thinking" before any visible content,
++// which would starve this call's max_tokens: 450 and come back empty.
++// gemma-4-31b answers directly with no reasoning overhead — verified
++// against the actual JSON-extraction prompt this function sends.
++const CEREBRAS_MODEL = 'gemma-4-31b';
+ 
+ function isRateLimit(msg = '') {
+   return msg.includes('429') || msg.toLowerCase().includes('rate limit');
+@@ -71,6 +77,7 @@ function localEnrich(conversation) {
+     enriched_at:        new Date(),
+     enrichment_version: 'local-1.0',
+     status:             'COMPLETED',
++    message_count:      messages.length,
+   };
+ }
+ 
+@@ -96,7 +103,7 @@ async function extractMetadata(cleanedText, conversation) {
+       const rawMetadata = parseJsonResponse(content);
+       validateMetadata(rawMetadata);
+       logger.info(`[ENRICHMENT] ${provider} succeeded`);
+-      return { ...buildEnrichment(rawMetadata), enrichment_version: `1.0.0-${provider}` };
++      return { ...buildEnrichment(rawMetadata), enrichment_version: `1.0.0-${provider}`, message_count: conversation.messages.length };
+     } catch (err) {
+       if (isRateLimit(err.message)) {
+         logger.warn(`[RATE LIMIT] ${provider} quota hit — switching to other provider`);
+@@ -135,60 +142,59 @@ class EnrichmentService {
+   }
+ 
+   async process(conversationId, attempt = 1) {
+-    console.log(`[ENRICHMENT] process() called for ${conversationId} (attempt ${attempt})`);
+-    
+     const conversation = await conversationService.getById(conversationId);
+     if (!conversation) {
+-      console.error(`[ENRICHMENT] !!! Conversation not found: ${conversationId} !!!`);
++      logger.error(`Enrichment failed: Conversation not found: ${conversationId}`);
+       return;
+     }
+ 
+-    console.log(`[ENRICHMENT] Found conversation: platform=${conversation.platform}, status=${conversation.status}, msgs=${conversation.messages?.length}`);
+-
+-    if (this.hasUsableEnrichment(conversation) && conversation.status === 'COMPLETED') {
+-      console.log(`[ENRICHMENT] SKIP — already enriched`);
++    // Only skip if enrichment exists AND the conversation hasn't grown since —
++    // this used to skip unconditionally once a conversation was ever
++    // enriched, so re-captures that added new messages (e.g. a continued
++    // chat) would keep their summary/topic frozen at the original content
++    // forever, even though messages itself was correctly getting updated.
++    const currentCount = (conversation.messages || []).length;
++    const enrichedAtCount = conversation.enrichment?.messageCountAtEnrichment;
++    if (
++      this.hasUsableEnrichment(conversation) &&
++      conversation.status === 'COMPLETED' &&
++      enrichedAtCount === currentCount
++    ) {
++      logger.info(`[ENRICHMENT SKIP] ${conversationId} already has enrichment data for current message count (${currentCount}).`);
+       return;
+     }
+ 
+     if (conversation.status === 'PROCESSING' && attempt === 1) {
+-      console.log(`[ENRICHMENT] SKIP — already in progress`);
++      logger.info(`Enrichment for ${conversationId} already in progress. Skipping.`);
+       return;
+     }
+ 
+     try {
+-      console.log(`[ENRICHMENT] Starting extraction for ${conversationId}`);
++      logger.info(`[ENRICHMENT START] attempt ${attempt} for ${conversationId}`);
+       await conversationService.updateStatus(conversationId, 'PROCESSING');
+ 
+       const text        = this.extractConversationText(conversation);
+       const cleanedText = cleanConversationText(text);
+-      console.log(`[ENRICHMENT] Text length: ${text.length}, cleaned: ${cleanedText.length}`);
+ 
+       if (!cleanedText || cleanedText.length < 3) {
+         throw new Error('Conversation content is empty');
+       }
+ 
+       const enrichment = await extractMetadata(cleanedText, conversation);
+-      console.log(`[ENRICHMENT] Metadata extracted: topic="${enrichment.topic}", version="${enrichment.enrichment_version}"`);
+-      
+-      const saved = await conversationService.updateEnrichment(conversationId, enrichment);
+-      if (saved) {
+-        console.log(`[ENRICHMENT] SUCCESS — enrichment saved to DB for ${conversationId}`);
+-      } else {
+-        console.error(`[ENRICHMENT] !!! updateEnrichment returned null for ${conversationId} !!!`);
+-      }
++      await conversationService.updateEnrichment(conversationId, enrichment);
++      logger.info(`[ENRICHMENT DONE] ${conversationId} (${enrichment.enrichment_version || 'local'})`);
+ 
+     } catch (error) {
+-      console.error(`[ENRICHMENT] FAILED attempt ${attempt}: ${error.message}`);
+-      console.error(`[ENRICHMENT] Error stack: ${error.stack}`);
++      logger.error(`[ENRICHMENT FAIL] attempt ${attempt} for ${conversationId}: ${error.message}`);
+ 
+       if (attempt < 3) {
+-        console.log(`[ENRICHMENT] Retrying ${conversationId} (attempt ${attempt + 1}/3)`);
+-        this.process(conversationId, attempt + 1).catch(err => {
+-          console.error(`[ENRICHMENT] Retry trigger failed: ${err.message}`);
+-        });
++        logger.info(`Retrying ${conversationId} (attempt ${attempt + 1})`);
++        this.process(conversationId, attempt + 1).catch(err =>
++          logger.error(`Retry trigger failed: ${err.message}`)
++        );
+       } else {
+-        console.error(`[ENRICHMENT] Marking as FAILED after 3 attempts for ${conversationId}`);
+         await conversationService.updateStatus(conversationId, 'FAILED', error.message);
++        logger.warn(`[ENRICHMENT] Marked as FAILED after 3 attempts`);
+       }
+     }
+   }
+diff --git a/backend/backend/src/services/groq.service.js b/backend/backend/src/services/groq.service.js
+index 2ea7819..eeca6a4 100644
+--- a/backend/backend/src/services/groq.service.js
++++ b/backend/backend/src/services/groq.service.js
+@@ -4,11 +4,40 @@ const logger = require('../utils/logger');
+ 
+ class GroqService {
+   constructor() {
+-    this.client = new OpenAI({
+-      apiKey:  config.apiKey,
+-      baseURL: config.baseUrl,
+-      timeout: 30000,
+-    });
++    // Lazy: don't touch the OpenAI SDK at construction time. It throws
++    // immediately if apiKey is missing, and this service is instantiated
++    // once as a module-level singleton — an unset key (e.g. when running
++    // on the Cerebras fallback only) would otherwise crash the whole
++    // process at require-time, before any request ever needs Groq.
++    //
++    // Separate clients for chat vs. summary/enrichment so each workload
++    // gets its own key and quota (see config/groq.js).
++    this._chatClient    = null;
++    this._summaryClient = null;
++  }
++
++  get chatClient() {
++    if (!this._chatClient) {
++      if (!config.apiKeyChat) throw new Error('No Groq chat API key configured');
++      this._chatClient = new OpenAI({
++        apiKey:  config.apiKeyChat,
++        baseURL: config.baseUrl,
++        timeout: 30000,
++      });
++    }
++    return this._chatClient;
++  }
++
++  get summaryClient() {
++    if (!this._summaryClient) {
++      if (!config.apiKeySummary) throw new Error('No Groq summary API key configured');
++      this._summaryClient = new OpenAI({
++        apiKey:  config.apiKeySummary,
++        baseURL: config.baseUrl,
++        timeout: 30000,
++      });
++    }
++    return this._summaryClient;
+   }
+ 
+   async chat(messages, systemPrompt = null) {
+@@ -25,7 +54,7 @@ class GroqService {
+ 
+     allMessages.push(...messages.map(m => ({ role: m.role, content: m.content })));
+ 
+-    const response = await this.client.chat.completions.create({
++    const response = await this.chatClient.chat.completions.create({
+       model:       config.model,
+       messages:    allMessages,
+       max_tokens:  2048,
+@@ -51,7 +80,7 @@ ${conversationText}`;
+ 
+     try {
+       logger.info(`DEBUG: [GROQ API CALL] Model: ${config.model}`);
+-      const response = await this.client.chat.completions.create({
++      const response = await this.summaryClient.chat.completions.create({
+         model:       config.model,
+         messages:    [{ role: 'user', content: prompt }],
+         max_tokens:  450,
+diff --git a/backend/backend/sync.js b/backend/backend/sync.js
+index 6ffcc6d..6ecfd1e 100644
+--- a/backend/backend/sync.js
++++ b/backend/backend/sync.js
+@@ -14,7 +14,7 @@ const path     = require('path');
+ const fs       = require('fs');
+ const os       = require('os');
+ 
+-const MONGODB_URI = process.env.MONGODB_URI;
++const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.DATABASE_URL;
+ const Conversation = require('./src/models/conversation.model');
+ 
+ async function findExportFile() {
+@@ -39,6 +39,10 @@ async function findExportFile() {
+ async function main() {
+   console.log('\n🧠 Brain Shadow — Sync Script\n');
+ 
++  if (!MONGODB_URI) {
++    throw new Error('Missing MongoDB connection string. Set MONGODB_URI, MONGO_URL, or DATABASE_URL.');
++  }
++
+   // 1. Connect to MongoDB
+   console.log('🔌 Connecting to MongoDB...');
+   await mongoose.connect(MONGODB_URI);
+diff --git a/backend/extractors/blackbox/background.js b/backend/extractors/blackbox/background.js
+index 57ae0cf..4216c28 100644
+--- a/backend/extractors/blackbox/background.js
++++ b/backend/extractors/blackbox/background.js
+@@ -1,4 +1,5 @@
+-﻿// Brain Shadow — Background Service Worker (Blackbox AI)
++﻿
++// Brain Shadow — Background Service Worker (Blackbox AI)
+ 
+ const STORAGE_KEY     = 'brain_shadow_conversations';
+ const META_KEY        = 'brain_shadow_meta';
+@@ -16,7 +17,10 @@ async function saveConversation(data, source = 'realtime') {
+     conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source };
+     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+     await updateMeta(conversations);
+-    // Sync handled by popup (MV3 service workers cannot fetch localhost)
++    // Sync to backend immediately (fire and forget)
++    syncToBackend(data).catch(err => {
++      console.warn('[Brain Shadow] Backend sync failed (local save OK):', err.message);
++    });
+     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴 Live' : '📦 Bulk'} saved: ${data.title} (${data.messages.length} msgs)`);
+     return { status: 'saved', key };
+   } catch (err) { return { status: 'error', error: err.message }; }
+@@ -80,3 +84,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+ });
+ 
+ console.log('[Brain Shadow] Blackbox background service worker started');
++
+diff --git a/backend/extractors/claude/background.js b/backend/extractors/claude/background.js
+index e096de7..af490ef 100644
+--- a/backend/extractors/claude/background.js
++++ b/backend/extractors/claude/background.js
+@@ -16,7 +16,10 @@ async function saveConversation(data, source = 'realtime') {
+     conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source };
+     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+     await updateMeta(conversations);
+-    // Sync handled by popup (MV3 service workers cannot fetch localhost)
++    // Sync to backend immediately (fire and forget)
++    syncToBackend(data).catch(err => {
++      console.warn('[Brain Shadow] Backend sync failed (local save OK):', err.message);
++    });
+     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴 Live' : '📦 Bulk'} saved: ${data.title} (${data.messages.length} msgs)`);
+     return { status: 'saved', key };
+   } catch (err) { return { status: 'error', error: err.message }; }
+diff --git a/backend/extractors/copilot/background.js b/backend/extractors/copilot/background.js
+index 6edb246..34753f6 100644
+--- a/backend/extractors/copilot/background.js
++++ b/backend/extractors/copilot/background.js
+@@ -16,7 +16,10 @@ async function saveConversation(data, source = 'realtime') {
+     conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source };
+     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+     await updateMeta(conversations);
+-    // Sync handled by popup (MV3 service workers cannot fetch localhost)
++    // Sync to backend immediately (fire and forget)
++    syncToBackend(data).catch(err => {
++      console.warn('[Brain Shadow] Backend sync failed (local save OK):', err.message);
++    });
+     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴 Live' : '📦 Bulk'} saved: ${data.title} (${data.messages.length} msgs)`);
+     return { status: 'saved', key };
+   } catch (err) { return { status: 'error', error: err.message }; }
+diff --git a/backend/extractors/deepseek/background.js b/backend/extractors/deepseek/background.js
+index 00bedfd..9857e4d 100644
+--- a/backend/extractors/deepseek/background.js
++++ b/backend/extractors/deepseek/background.js
+@@ -16,7 +16,10 @@ async function saveConversation(data, source = 'realtime') {
+     conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source };
+     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+     await updateMeta(conversations);
+-    // Sync handled by popup (MV3 service workers cannot fetch localhost)
++    // Sync to backend immediately (fire and forget)
++    syncToBackend(data).catch(err => {
++      console.warn('[Brain Shadow] Backend sync failed (local save OK):', err.message);
++    });
+     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴 Live' : '📦 Bulk'} saved: ${data.title} (${data.messages.length} msgs)`);
+     return { status: 'saved', key };
+   } catch (err) { return { status: 'error', error: err.message }; }
+diff --git a/backend/extractors/deepseek/fetch.js b/backend/extractors/deepseek/fetch.js
+index 24a9795..fc4164a 100644
+--- a/backend/extractors/deepseek/fetch.js
++++ b/backend/extractors/deepseek/fetch.js
+@@ -132,21 +132,6 @@ function extractDeepSeekId(url) {
+   } catch { return url; }
+ }
+ 
+-function findConversationContainer(asstEls) {
+-  if (!asstEls || !asstEls.length) return null;
+-  let card = asstEls[0];
+-  let container = card.parentElement;
+-  const isAssistant = (el) => asstEls.some(ae => el === ae || el.contains(ae));
+-  while (container && container !== document.body) {
+-    const siblings = [...container.children];
+-    const hasUserSibling = siblings.some(sib => !isAssistant(sib) && sib.innerText?.trim().length > 3);
+-    if (hasUserSibling) return { container, card };
+-    card = container;
+-    container = container.parentElement;
+-  }
+-  return null;
+-}
+-
+ // ── Core scraper ───────────────────────────────────────────
+ function scrapeConversation() {
+   let userEls = [], asstEls = [];
+@@ -154,32 +139,6 @@ function scrapeConversation() {
+   for (const sel of USER_SEL) { const f = [...document.querySelectorAll(sel)]; if (f.length) { userEls = f; break; } }
+   for (const sel of ASST_SEL) { const f = [...document.querySelectorAll(sel)]; if (f.length) { asstEls = f; break; } }
+ 
+-  // Sibling & LCA fallback (dynamic layouts)
+-  if (asstEls.length > 0 && userEls.length === 0) {
+-    const found = findConversationContainer(asstEls);
+-    if (found) {
+-      const { container } = found;
+-      const children = [...container.children];
+-      const newUserEls = [];
+-      const newAsstEls = [];
+-      for (const child of children) {
+-        const isAsst = asstEls.some(ae => child === ae || child.contains(ae));
+-        const text = child.innerText?.trim();
+-        if (!text || text.length <= 1) continue;
+-        if (isAsst) {
+-          const myAsst = asstEls.filter(ae => child === ae || child.contains(ae));
+-          newAsstEls.push(...myAsst);
+-        } else {
+-          newUserEls.push(child);
+-        }
+-      }
+-      if (newUserEls.length > 0) {
+-        userEls = newUserEls;
+-        asstEls = newAsstEls;
+-      }
+-    }
+-  }
+-
+   if (!userEls.length && !asstEls.length) {
+     for (const sel of ['[class*="chatContent"]','[class*="messageList"]','[class*="conversationContent"]','main']) {
+       const c = document.querySelector(sel);
+@@ -194,12 +153,7 @@ function scrapeConversation() {
+   const allItems = [
+     ...userEls.map(el => ({ el, role: 'user' })),
+     ...asstEls.map(el => ({ el, role: 'assistant' })),
+-  ].sort((a, b) => {
+-    const pos = a.el.compareDocumentPosition(b.el);
+-    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return -1;
+-    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return 1;
+-    return 0;
+-  });
++  ].sort((a, b) => a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+ 
+   let messages = allItems
+     .map(({ el, role }) => { const content = el.innerText?.trim(); return content && content.length > 3 ? { role, content } : null; })
+diff --git a/backend/extractors/gemini/fetch.js b/backend/extractors/gemini/fetch.js
+index 7976256..39f573a 100644
+--- a/backend/extractors/gemini/fetch.js
++++ b/backend/extractors/gemini/fetch.js
+@@ -91,86 +91,32 @@ function removeOverlay() { overlayEl?.remove(); overlayEl = null; }
+ 
+ // ── Scroll conversation to load all messages ───────────────
+ function getConversationContainer() {
+-  // Strategy 1: walk up from a message element to find scrollable parent
+   const anchor = document.querySelector(USER_SEL.join(','));
+-  if (anchor) {
+-    let el = anchor.parentElement;
+-    while (el && el !== document.documentElement) {
+-      const s = window.getComputedStyle(el);
+-      if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 50)
+-        return el;
+-      el = el.parentElement;
+-    }
+-  }
+-  // Strategy 2: probe known Gemini virtual-scroll containers
+-  for (const sel of ['[class*="scroll-container"]', '[class*="conversation"]', '[role="region"]', 'main', '[class*="content"]']) {
+-    const el = document.querySelector(sel);
+-    if (!el) continue;
++  if (!anchor) return null;
++  let el = anchor.parentElement;
++  while (el && el !== document.documentElement) {
+     const s = window.getComputedStyle(el);
+-    if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) return el;
++    if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 50)
++      return el;
++    el = el.parentElement;
+   }
+-  // Strategy 3: find any scrollable element inside main
+-  const main = document.querySelector('main') || document.body;
+-  const candidates = [...main.querySelectorAll('*')].filter(el => {
+-    const s = window.getComputedStyle(el);
+-    return (s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 100;
+-  }).sort((a, b) => b.scrollHeight - a.scrollHeight);
+-  if (candidates.length) return candidates[0];
+   return document.documentElement;
+ }
+ 
+-function countVisibleMessages() {
+-  let count = 0;
+-  for (const sel of USER_SEL) count += document.querySelectorAll(sel).length;
+-  for (const sel of ASST_SEL) count += document.querySelectorAll(sel).length;
+-  return count;
+-}
+-
+ function scrollToLoadAllMessages() {
+   return new Promise((resolve) => {
+-    const c   = getConversationContainer();
+-    if (!c) { resolve(); return; }
+-    const maxPasses = 8;
+-    let pass  = 0;
+-    let prevCount = countVisibleMessages();
+-
+-    const safety = setTimeout(resolve, 40_000);
+-
+-    function doPass() {
+-      if (++pass > maxPasses) { clearTimeout(safety); resolve(); return; }
+-
+-      // Scroll all the way up first (triggers Gemini to load earliest messages)
+-      c.scrollTop = 0;
+-      setTimeout(() => {
+-        // Then scroll down in small steps
+-        const step = Math.max(150, Math.floor((c.clientHeight || 600) * 0.4));
+-        let pos = 0;
+-        const tick = () => {
+-          pos += step;
+-          c.scrollTop = pos;
+-          setTimeout(() => {
+-            if (pos < c.scrollHeight) {
+-              tick();
+-            } else {
+-              // Scroll back to top for the next pass
+-              c.scrollTop = 0;
+-              const newCount = countVisibleMessages();
+-              if (newCount > prevCount) {
+-                prevCount = newCount;
+-                setTimeout(doPass, 600);
+-              } else {
+-                clearTimeout(safety); resolve();
+-              }
+-            }
+-          }, 350);
+-        };
+-        setTimeout(tick, 300);
+-      }, 400);
+-    }
+-
+-    // Ensure we start at top and do first pass
+-    c.scrollTop = 0;
+-    setTimeout(doPass, 300);
++    const container = getConversationContainer();
++    if (!container) { resolve(); return; }
++    container.scrollTop = 0;
++    let pos = 0;
++    const step = Math.max(300, Math.floor((container.clientHeight || 600) * 0.75));
++    const tick = () => {
++      pos += step;
++      container.scrollTop = pos;
++      setTimeout(() => { pos < container.scrollHeight ? tick() : resolve(); }, 500);
++    };
++    setTimeout(tick, 400);
++    setTimeout(resolve, 30_000);
+   });
+ }
+ 
+@@ -273,19 +219,13 @@ function scrapeConversation() {
+ // ── Capture pipeline ───────────────────────────────────────
+ let isCapturing = false;
+ 
+-async function captureAndSend(scroll = true) {
++async function captureAndSend() {
+   if (isCapturing) return { status: 'busy' };
+   isCapturing = true;
+ 
+   try {
+     await waitForStreamingToFinish();
+-    if (scroll) {
+-      await scrollToLoadAllMessages();
+-    } else {
+-      // Auto-capture: gentle single pass so virtual scroll loads at least visible range
+-      const c = getConversationContainer();
+-      if (c) { c.scrollTop = 0; await new Promise(r => setTimeout(r, 300)); c.scrollTop = c.scrollHeight; await new Promise(r => setTimeout(r, 1000)); }
+-    }
++    await scrollToLoadAllMessages();
+ 
+     const conversation = scrapeConversation();
+     if (!conversation) return { status: 'empty' };
+@@ -307,7 +247,7 @@ async function captureAndSend(scroll = true) {
+ let debounceTimer = null;
+ const observer = new MutationObserver(() => {
+   clearTimeout(debounceTimer);
+-  debounceTimer = setTimeout(() => captureAndSend(false), 3000);
++  debounceTimer = setTimeout(captureAndSend, 3000);
+ });
+ 
+ function waitForChatAndObserve() {
+@@ -323,7 +263,7 @@ new MutationObserver(() => {
+   if (location.href !== lastUrl) {
+     lastUrl = location.href;
+     console.log('[Brain Shadow] Navigation →', location.href);
+-    setTimeout(() => captureAndSend(true), 4000);
++    setTimeout(captureAndSend, 4000);
+   }
+ }).observe(document, { subtree: true, childList: true });
+ 
+@@ -353,24 +293,23 @@ function extractRecents() {
+     threads.push({ url: canonical, title: title.slice(0, 120) });
+   }
+ 
+-  // Pass 2 — broad UUID scan (always runs to catch sidebar links regex misses)
+-  const regexCount = threads.length;
+-  {
+-    console.log(`[Brain Shadow] Broad UUID scan...`);
++  // Pass 2 — broad UUID fallback
++  if (threads.length === 0) {
++    console.warn('[Brain Shadow] Regex matched 0 — trying broad UUID scan');
+     const SKIP = /\/(login|signup|settings|help|about|privacy|terms|logout|new|upgrade|billing)\b/i;
+     for (const link of allLinks) {
+       let u; try { u = new URL(link.href); } catch { continue; }
+       if (u.origin !== location.origin) continue;
+       if (SKIP.test(u.pathname) || u.pathname.length < 4) continue;
+-      if (!u.pathname.split('/').filter(Boolean).some(s => /^[a-zA-Z0-9_\-]{6,}$/.test(s))) continue;
++      const segs = u.pathname.split('/').filter(Boolean);
++      if (!segs.some(s => /^[a-zA-Z0-9_\-]{8,}$/.test(s))) continue;
+       const canonical = `${u.origin}${u.pathname}`;
+       if (seen.has(canonical)) continue;
+       seen.add(canonical);
+-      const title = link.getAttribute('aria-label')?.trim() || link.querySelector('span,p,div')?.innerText?.trim() || link.innerText?.trim() || `Chat ${threads.length + 1}`;
++      const title = link.getAttribute('aria-label')?.trim() || link.innerText?.trim() || `Chat ${threads.length + 1}`;
+       threads.push({ url: canonical, title: title.slice(0, 120) });
+     }
+-    const broadFound = threads.length - regexCount;
+-    if (broadFound > 0) console.log(`[Brain Shadow] Broad scan found ${broadFound} additional`);
++    if (threads.length > 0) console.log(`[Brain Shadow] Broad scan found ${threads.length} — update CONV_URL_RE`);
+   }
+ 
+   console.log(`[Brain Shadow] Gemini conversations found: ${threads.length}`);
+@@ -395,15 +334,13 @@ async function scrollSidebarToLoadAll() {
+   }
+ 
+   if (!sidebar) {
+-    const sels = ['nav','aside','[role="navigation"]','[aria-label*="history" i]','[aria-label*="chat" i]','[aria-label*="Recent" i]','[class*="nav"]','[class*="menu"]'];
+-    for (const sel of sels) {
+-      for (const el of document.querySelectorAll(sel)) {
+-        const s = window.getComputedStyle(el);
+-        if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) {
+-          sidebar = el; break;
+-        }
++    for (const sel of ['nav','aside','[role="navigation"]','[aria-label*="history" i]','[aria-label*="chat" i]']) {
++      const el = document.querySelector(sel);
++      if (!el) continue;
++      const s = window.getComputedStyle(el);
++      if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) {
++        sidebar = el; break;
+       }
+-      if (sidebar) break;
+     }
+   }
+ 
+@@ -414,7 +351,7 @@ async function scrollSidebarToLoadAll() {
+       target.scrollBy(0, target.clientHeight || 500);
+       count++;
+       const newH = target.scrollHeight;
+-      if (newH === lastH || count >= 100) {
++      if (newH === lastH || count >= 80) {
+         clearInterval(tick);
+         target.scrollTo(0, 0);
+         setTimeout(resolve, 400);
+@@ -435,7 +372,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+   }
+ 
+   if (request.type === 'CAPTURE_CURRENT') {
+-    captureAndSend(true)
++    captureAndSend()
+       .then(sendResponse)
+       .catch(err => sendResponse({ status: 'error', error: err?.message }));
+     return true;
+diff --git a/backend/extractors/grok/background.js b/backend/extractors/grok/background.js
+index f9204ce..49f5f4f 100644
+--- a/backend/extractors/grok/background.js
++++ b/backend/extractors/grok/background.js
+@@ -16,7 +16,10 @@ async function saveConversation(data, source = 'realtime') {
+     conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source };
+     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+     await updateMeta(conversations);
+-    // Sync handled by popup (MV3 service workers cannot fetch localhost)
++    // Sync to backend immediately (fire and forget)
++    syncToBackend(data).catch(err => {
++      console.warn('[Brain Shadow] Backend sync failed (local save OK):', err.message);
++    });
+     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴 Live' : '📦 Bulk'} saved: ${data.title} (${data.messages.length} msgs)`);
+     return { status: 'saved', key };
+   } catch (err) { return { status: 'error', error: err.message }; }
+diff --git a/backend/extractors/mscopilot/background.js b/backend/extractors/mscopilot/background.js
+index 2124ad4..44b3904 100644
+--- a/backend/extractors/mscopilot/background.js
++++ b/backend/extractors/mscopilot/background.js
+@@ -16,7 +16,10 @@ async function saveConversation(data, source = 'realtime') {
+     conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source };
+     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+     await updateMeta(conversations);
+-    // Sync handled by popup (MV3 service workers cannot fetch localhost)
++    // Sync to backend immediately (fire and forget)
++    syncToBackend(data).catch(err => {
++      console.warn('[Brain Shadow] Backend sync failed (local save OK):', err.message);
++    });
+     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴 Live' : '📦 Bulk'} saved: ${data.title} (${data.messages.length} msgs)`);
+     return { status: 'saved', key };
+   } catch (err) { return { status: 'error', error: err.message }; }
+diff --git a/backend/extractors/perplexity/background.js b/backend/extractors/perplexity/background.js
+index a9033f8..83a028e 100644
+--- a/backend/extractors/perplexity/background.js
++++ b/backend/extractors/perplexity/background.js
+@@ -16,7 +16,10 @@ async function saveConversation(data, source = 'realtime') {
+     conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source };
+     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+     await updateMeta(conversations);
+-    // Sync handled by popup (MV3 service workers cannot fetch localhost)
++    // Sync to backend immediately (fire and forget)
++    syncToBackend(data).catch(err => {
++      console.warn('[Brain Shadow] Backend sync failed (local save OK):', err.message);
++    });
+     console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴 Live' : '📦 Bulk'} saved: ${data.title} (${data.messages.length} msgs)`);
+     return { status: 'saved', key };
+   } catch (err) { return { status: 'error', error: err.message }; }
+diff --git a/backend/extractors/perplexity/fetch.js b/backend/extractors/perplexity/fetch.js
+index 3b407b6..7edf032 100644
+--- a/backend/extractors/perplexity/fetch.js
++++ b/backend/extractors/perplexity/fetch.js
+@@ -95,43 +95,6 @@ function scrollToLoadAllMessages() {
+ }
+ 
+ // ── Helpers ────────────────────────────────────────────────
+-/**
+- * Check if content looks like a UUID, hash, or conversation ID.
+- * Filters out: UUIDs, short hex strings, conversation slugs without spaces.
+- */
+-function looksLikeConversationId(text) {
+-  if (!text) return false;
+-  // Remove whitespace to check pattern
+-  const normalized = text.replace(/\s+/g, '');
+-  
+-  // UUID pattern: 8-4-4-4-12 hex digits
+-  if (/^[a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}$/i.test(normalized)) {
+-    return true;
+-  }
+-  
+-  // Hex-only strings 32+ chars (typical UUID without dashes)
+-  if (/^[a-f0-9]{32,}$/i.test(normalized)) {
+-    return true;
+-  }
+-  
+-  // Short hex strings that are unlikely to be real messages (like "316a8535")
+-  if (/^[a-f0-9\s]{8,20}$/.test(text) && /[a-f0-9]/.test(text) && text.replace(/\s/g, '').length < 20) {
+-    return true;
+-  }
+-  
+-  // Conversation slug pattern: "what-is-ml-AbCdEfGh" (title-id format)
+-  if (/^[a-z0-9\-]{20,}$/.test(normalized) && normalized.split('-').length >= 2) {
+-    const parts = normalized.split('-');
+-    const lastPart = parts[parts.length - 1];
+-    // If the last part is 8+ hex chars, likely a hash suffix
+-    if (/^[a-z0-9]{8,}$/.test(lastPart)) {
+-      return true;
+-    }
+-  }
+-  
+-  return false;
+-}
+-
+ function deduplicateConsecutiveRoles(messages) {
+   if (!messages.length) return messages;
+   const out = [messages[0]];
+@@ -155,112 +118,39 @@ function extractPerplexityId(url) {
+   } catch { return url; }
+ }
+ 
+-function findConversationContainer(asstEls) {
+-  if (!asstEls || !asstEls.length) return null;
+-  let card = asstEls[0];
+-  let container = card.parentElement;
+-  const isAssistant = (el) => asstEls.some(ae => el === ae || el.contains(ae));
+-  while (container && container !== document.body) {
+-    const siblings = [...container.children];
+-    const hasUserSibling = siblings.some(sib => !isAssistant(sib) && sib.innerText?.trim().length > 3);
+-    if (hasUserSibling) return { container, card };
+-    card = container;
+-    container = container.parentElement;
+-  }
+-  return null;
+-}
+-
+ // ── Core scraper ───────────────────────────────────────────
+ function scrapeConversation() {
+   // Perplexity: user query + AI answer pairs
+-  // Updated selectors to be more specific and robust
+   const USER_SEL = [
+-    // First try very specific Perplexity user message containers
+-    '[class*="QueryCont"]',      // Common pattern in Perplexity
+-    '[class*="userQuery"]',
+-    '[class*="user-query"]',
+-    '[data-testid*="user-message"]',
+     '[data-testid*="user"]',
+-    '[class*="UserQuery"]',
+-    '[class*="query-text"]',
+-    '[class*="queryText"]',
+-    '[class*="humanMessage"]',
+-    // Fallback to textarea if shown as readonly
+-    'textarea[readonly]',
++    '[class*="UserQuery"]',   '[class*="user-query"]',
++    '[class*="userQuery"]',   '[class*="query-text"]',
++    '[class*="queryText"]',   '[class*="humanMessage"]',
++    'textarea[readonly]',     // sometimes the query is shown as readonly
+   ];
+-  
+   const ASST_SEL = [
+     '[data-testid*="answer"]',
+-    '[class*="AnswerBody"]',
+-    '[class*="answer-body"]',
+-    '[class*="answerBody"]',
+-    '[class*="prose"]',
+-    '[class*="markdown"]',
+-    '[class*="aiResponse"]',
+-    '[class*="ai-response"]',
+-    '[class*="ResponseBody"]',
++    '[class*="AnswerBody"]',  '[class*="answer-body"]',
++    '[class*="answerBody"]',  '[class*="prose"]',
++    '[class*="markdown"]',    '[class*="aiResponse"]',
++    '[class*="ai-response"]', '[class*="ResponseBody"]',
+   ];
+ 
+   let userEls = [], asstEls = [];
+   for (const sel of USER_SEL) { const f = [...document.querySelectorAll(sel)]; if (f.length) { userEls = f; break; } }
+   for (const sel of ASST_SEL) { const f = [...document.querySelectorAll(sel)]; if (f.length) { asstEls = f; break; } }
+ 
+-  // Sibling & LCA fallback (dynamic layouts)
+-  if (asstEls.length > 0 && userEls.length === 0) {
+-    const found = findConversationContainer(asstEls);
+-    if (found) {
+-      const { container } = found;
+-      const children = [...container.children];
+-      const newUserEls = [];
+-      const newAsstEls = [];
+-      for (const child of children) {
+-        const isAsst = asstEls.some(ae => child === ae || child.contains(ae));
+-        const text = child.innerText?.trim();
+-        if (!text || text.length <= 1) continue;
+-        // CRITICAL: Filter out elements that look like conversation IDs
+-        if (looksLikeConversationId(text)) continue;
+-        if (isAsst) {
+-          const myAsst = asstEls.filter(ae => child === ae || child.contains(ae));
+-          newAsstEls.push(...myAsst);
+-        } else {
+-          newUserEls.push(child);
+-        }
+-      }
+-      if (newUserEls.length > 0) {
+-        userEls = newUserEls;
+-        asstEls = newAsstEls;
+-      }
+-    }
+-  }
+-
+-  // Container fallback with improved detection
++  // Container fallback
+   if (!userEls.length && !asstEls.length) {
+-    const containerSels = [
+-      '[class*="threadContent"]',
+-      '[class*="thread-content"]',
+-      '[class*="messageList"]',
+-      '[class*="chatContent"]',
+-      'main',
+-      '[class*="conversation"]',
+-    ];
+-    for (const sel of containerSels) {
++    for (const sel of ['[class*="threadContent"]','[class*="thread-content"]','main','[class*="conversation"]']) {
+       const c = document.querySelector(sel);
+       if (!c) continue;
+-      const children = [...c.children].filter(el => {
+-        const text = el.innerText?.trim();
+-        return text && text.length > 3 && !looksLikeConversationId(text);
+-      });
+-      if (children.length >= 2) { 
+-        children.forEach((el, i) => (i % 2 === 0 ? userEls : asstEls).push(el)); 
+-        break; 
+-      }
++      const children = [...c.children].filter(el => el.innerText?.trim().length > 3);
++      if (children.length >= 2) { children.forEach((el, i) => (i % 2 === 0 ? userEls : asstEls).push(el)); break; }
+     }
+   }
+ 
+-  if (!userEls.length && !asstEls.length) {
+-    console.warn('[Brain Shadow] Perplexity: Could not find user or assistant elements');
+-    return null;
+-  }
++  if (!userEls.length && !asstEls.length) return null;
+ 
+   const allItems = [
+     ...userEls.map(el => ({ el, role: 'user' })),
+@@ -268,27 +158,12 @@ function scrapeConversation() {
+   ].sort((a, b) => a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+ 
+   let messages = allItems
+-    .map(({ el, role }) => { 
+-      const content = el.innerText?.trim(); 
+-      // Validate content is not a conversation ID or empty
+-      if (!content || content.length <= 3 || looksLikeConversationId(content)) {
+-        return null;
+-      }
+-      return { role, content }; 
+-    })
++    .map(({ el, role }) => { const content = el.innerText?.trim(); return content && content.length > 3 ? { role, content } : null; })
+     .filter(Boolean);
+ 
+-  if (messages.length === 0) {
+-    console.warn('[Brain Shadow] Perplexity: All extracted messages were invalid (possibly UUIDs)');
+-    return null;
+-  }
+-
+   messages = deduplicateConsecutiveRoles(messages);
+   const last = messages[messages.length - 1];
+-  if (!last || last.role !== 'assistant') {
+-    console.warn('[Brain Shadow] Perplexity: Last message is not from assistant');
+-    return null;
+-  }
++  if (!last || last.role !== 'assistant') return null;
+   messages = assignRelativeTimestamps(messages);
+ 
+   const external_id = extractPerplexityId(location.href);
+diff --git a/backend/extractors/universal/background.js b/backend/extractors/universal/background.js
+index 48f642e..50886e3 100644
+--- a/backend/extractors/universal/background.js
++++ b/backend/extractors/universal/background.js
+@@ -14,7 +14,7 @@ const STORAGE_KEY  = 'brain_shadow_conversations';
+ const META_KEY     = 'brain_shadow_meta';
+ const BACKEND_KEY  = 'brain_shadow_backend_url';
+ const PROGRESS_KEY = 'brain_shadow_scrape_progress';
+-const DEFAULT_BACKEND = 'https://shadow-brain-u4ua.onrender.com';
++const DEFAULT_BACKEND = 'http://localhost:8000';
+ 
+ // ── Keep service worker alive during scraping ──────────────
+ let keepAliveTimer = null;
+@@ -77,15 +77,19 @@ async function navigateTab(tabId, url, extraMs = 1500) {
+ }
+ 
+ async function waitForContentScript(tabId, maxMs = 20000) {
+-  const start = Date.now(); let lastCount = -1, stable = 0, zeroStable = 0;
++  const start = Date.now(); let lastCount = -1, stable = 0;
+   while (Date.now() - start < maxMs) {
+     try {
+       const r = await tabMessage(tabId, { type: 'PING' });
+       if (r?.pong) {
+         const n = r.messageCount || 0;
++        // Require an actual (non-zero) message count before declaring "stable" —
++        // a freshly navigated tab reports 0 for the first second or two, and a
++        // background/inactive tab (throttled by Chrome) can stay at 0 far longer
++        // while it's still hydrating. Treating that as "ready" caused captures
++        // to fire on a blank page and silently fail.
+         if (n > 0 && n === lastCount) { stable++; if (stable >= 3) return; }
+-        else if (n === 0) { zeroStable++; if (zeroStable >= 5) return; lastCount = n; }
+-        else { stable = 0; zeroStable = 0; lastCount = n; }
++        else { stable = 0; lastCount = n; }
+       }
+     } catch {}
+     await new Promise(r => setTimeout(r, 1000));
+@@ -98,17 +102,6 @@ function tabMessage(tabId, msg) {
+   });
+ }
+ 
+-// Wait until the content script's message listener is registered (responds to PING)
+-async function waitForContentScriptReady(tabId, maxMs = 15000) {
+-  const start = Date.now();
+-  while (Date.now() - start < maxMs) {
+-    const r = await tabMessage(tabId, { type: 'PING' });
+-    if (r?.pong) return true;
+-    await new Promise(r => setTimeout(r, 500));
+-  }
+-  return false;
+-}
+-
+ // ══════════════════════════════════════════════════════════
+ // SCRAPE ONE PLATFORM — fully independent, own hidden tab
+ // ══════════════════════════════════════════════════════════
+@@ -129,53 +122,53 @@ async function scrapePlatform(platform, baseUrl) {
+   let tabId = null;
+   try {
+     // Open hidden tab — user's current page is NOT touched
+-    console.log(`[${platform}] Opening hidden tab: ${baseUrl}`);
+     const tab = await new Promise(resolve => chrome.tabs.create({ url: baseUrl, active: false }, resolve));
+     tabId = tab.id;
+     await waitForTabLoad(tabId, 2500);
+-    console.log(`[${platform}] Tab loaded (id=${tabId})`);
+ 
+     await setSessionProgress(platform, { title: 'Reading sidebar…' });
+ 
+-    // Tell the content script to suppress auto-capture during scrape mode
+-    try { await tabMessage(tabId, { type: 'SET_SCRAPE_MODE', enabled: true }); } catch {}
+-
+-    // Wait until content script is ready before reading sidebar
+-    const ready = await waitForContentScriptReady(tabId);
+-    if (!ready) {
+-      console.warn(`[${platform}] Content script did not respond to PING after ${15}s — aborting`);
+-      await setSessionProgress(platform, { running: false, done: true, title: 'Content script not ready' });
+-      return;
+-    }
+-
+-    console.log(`[${platform}] Sending GET_SIDEBAR_CHATS...`);
+     const threads = await tabMessage(tabId, { type: 'GET_SIDEBAR_CHATS' }) || [];
+-    console.log(`[${platform}] GET_SIDEBAR_CHATS returned ${threads.length} threads`);
+ 
+     if (!threads.length) {
+-      console.warn(`[${platform}] No conversations found in sidebar — scraping cannot proceed`);
+-      console.warn(`[${platform}] Possible cause: Gemini DOM changed and extractRecents() cannot find <a> tags`);
+-      await setSessionProgress(platform, { running: false, done: true, pct: 100, title: 'No conversations found — DOM may have changed' });
++      await setSessionProgress(platform, { running: false, done: true, pct: 100, title: 'No conversations found' });
+       return;
+     }
+ 
+-    // Filter already-captured conversations
++    // Filter already-captured conversations — but only skip ones captured
++    // recently. Without a freshness window, a conversation captured once
++    // was excluded from every future bulk import forever, even after the
++    // user kept chatting in it — so its message count and enrichment in the
++    // DB would stay frozen at whatever it was on the very first capture,
++    // no matter how much the real conversation grew afterward.
++    const RECAPTURE_AFTER_MS = 6 * 60 * 60 * 1000; // re-check anything older than 6h
+     const existing = await getAllConversations();
+-    console.log(`[${platform}] Existing conversations in storage: ${existing.length}`);
+-    const capturedPaths = new Set(existing.map(c => { try { return new URL(c.url).pathname; } catch { return c.url; } }));
+-    console.log(`[${platform}] Captured pathnames: ${[...capturedPaths].join(', ') || 'none'}`);
+-    const newThreads   = threads.filter(t => { try { return !capturedPaths.has(new URL(t.url).pathname); } catch { return true; } });
+-    const skipped      = threads.length - newThreads.length;
+-    console.log(`[${platform}] After dedup: ${newThreads.length} new, ${skipped} already captured`);
++    const capturedPaths = new Map();
++    for (const c of existing) {
++      try {
++        const path   = new URL(c.url).pathname;
++        const savedAt = new Date(c.saved_at || 0).getTime();
++        const prev    = capturedPaths.get(path);
++        if (!prev || savedAt > prev) capturedPaths.set(path, savedAt);
++      } catch { /* skip unparseable URLs — treat as not captured */ }
++    }
++    const now = Date.now();
++    const newThreads = threads.filter(t => {
++      try {
++        const savedAt = capturedPaths.get(new URL(t.url).pathname);
++        return savedAt === undefined || (now - savedAt) > RECAPTURE_AFTER_MS;
++      } catch { return true; }
++    });
++    const skipped = threads.length - newThreads.length;
+ 
+     if (!newThreads.length) {
+       await setSessionProgress(platform, { running: false, done: true, pct: 100, skipped, title: `All ${threads.length} already captured` });
+       return;
+     }
+-  await setSessionProgress(platform, {
+-    total: newThreads.length, skipped, title: `Found ${newThreads.length} new chats` });
+ 
+-    let savedCount = 0, syncedCount = 0, duplicateCount = 0, failedCount = 0, skippedCount = 0, emptyCount = 0;
++    await setSessionProgress(platform, { total: newThreads.length, skipped, title: `Found ${newThreads.length} new chats` });
++
++    let savedCount = 0, syncedCount = 0, failedCount = 0;
+ 
+     for (let i = 0; i < newThreads.length; i++) {
+       // Check this session's stop flag (not global — each session has its own)
+@@ -185,77 +178,52 @@ async function scrapePlatform(platform, baseUrl) {
+       const { url, title } = newThreads[i];
+       const pct = Math.round(((i + 1) / newThreads.length) * 100);
+ 
+-      await setSessionProgress(platform, { current: i + 1, pct, title, savedCount, duplicateCount, failedCount, skippedCount, emptyCount });
++      await setSessionProgress(platform, { current: i + 1, pct, title });
+       chrome.action.setBadgeText({ text: `${pct}%` });
+ 
+-      console.log(`[${platform}] Moving to next conversation (${i+1}/${newThreads.length}): "${title}"`);
+-
+       try {
+-        console.log(`[${platform}] Navigating to: ${url}`);
+         await navigateTab(tabId, url, 1500);
+-        // Re-enable scrape mode on the NEW content script instance (navigating re-injects it)
+-        try { await tabMessage(tabId, { type: 'SET_SCRAPE_MODE', enabled: true }); } catch {}
+-        console.log(`[${platform}] Waiting for content script...`);
+         await waitForContentScript(tabId);
+-        console.log(`[${platform}] Content script ready`);
+ 
+         let captureResult = null;
+         for (let attempt = 0; attempt < 3; attempt++) {
+-          console.log(`[${platform}] Capture attempt ${attempt+1}/3 for: "${title}"`);
+           captureResult = await tabMessage(tabId, { type: 'CAPTURE_CURRENT' });
+-          console.log(`[${platform}] CAPTURE_CURRENT returned: ${JSON.stringify(captureResult)}`);
+-          if (captureResult?.status === 'saved' || captureResult?.status === 'skipped' || captureResult?.status === 'empty') break;
++          if (captureResult?.status === 'saved' || captureResult?.status === 'skipped') break;
+           await new Promise(r => setTimeout(r, 2000));
+         }
+ 
+-        const status = captureResult?.status || 'unknown';
+-        const reason = captureResult?.reason || '';
+-        console.log(`[${platform}] Final status: ${status}, reason: ${reason || 'none'}`);
+-
+-        if (status === 'saved') {
++        // Only count it as saved if a capture attempt actually succeeded —
++        // previously this incremented unconditionally, so the reported
++        // "N saved" count included chats that failed every retry and were
++        // never written to storage or synced.
++        if (captureResult?.status === 'saved' || captureResult?.status === 'skipped') {
+           savedCount++;
+           if (captureResult?.synced) syncedCount++;
+           await addToTotals(1, captureResult?.synced ? 1 : 0);
+-          console.log(`[${platform}] Conversation saved: "${title}" | chatCount=${savedCount} | msgCount=${captureResult?.message_count || 0} | synced=${!!captureResult?.synced}`);
+-        } else if (status === 'skipped' && reason === 'duplicate') {
+-          // Auto-capture (from waitForChatAndObserve 3.5s timeout) saved it first
+-          duplicateCount++;
+-          savedCount++;
+-          console.log(`[${platform}] Duplicate (auto-captured): "${title}" | chatCount=${savedCount} | msgCount=${captureResult?.message_count || 0}`);
+-        } else if (status === 'skipped') {
+-          skippedCount++;
+-          console.log(`[${platform}] Skipped: "${title}" — ${reason || 'no reason'}`);
+-        } else if (status === 'empty') {
+-          emptyCount++;
+-          console.log(`[${platform}] Empty: "${title}" — no messages found on page (DOM selectors may not match)`);
+         } else {
+           failedCount++;
+-          console.warn(`[${platform}] Capture failed for "${title}": ${status}${reason ? ' ('+reason+')' : ''}`);
++          console.warn(`[Brain Shadow] ${platform} capture failed for "${title}" after 3 attempts:`, captureResult);
+         }
+ 
+-        console.log(`[${platform}] Chat count updated: ${savedCount} saved · ${duplicateCount} duplicates · ${emptyCount} empty · ${failedCount} failed`);
+-
+       } catch (e) {
+         failedCount++;
+-        console.error(`[${platform}] Error: ${e.message}`);
++        console.error(`[Brain Shadow] ${platform} error:`, e.message);
+       }
+ 
+       await new Promise(r => setTimeout(r, 150));
+     }
+ 
+     await setSessionProgress(platform, {
+-      running: false, done: true, pct: 100, savedCount, syncedCount, duplicateCount, failedCount, skippedCount, emptyCount,
+-      title: `Done — ${savedCount} saved · ${syncedCount} synced · ${duplicateCount} duplicates · ${emptyCount} empty · ${failedCount} failed`,
++      running: false, done: true, pct: 100, savedCount, syncedCount, failedCount,
++      title: failedCount > 0
++        ? `Done — ${savedCount} saved · ${syncedCount} synced · ${failedCount} failed`
++        : `Done — ${savedCount} saved · ${syncedCount} synced`,
+     });
+ 
+-    console.log(`[${platform}] Scraping finished: ${savedCount} saved · ${syncedCount} synced · ${duplicateCount} duplicates · ${emptyCount} empty · ${failedCount} failed`);
+-
+   } catch (err) {
+-    console.error(`[${platform}] Scrape failed:`, err.message);
++    console.error(`[Brain Shadow] ${platform} scrape failed:`, err.message);
+     await setSessionProgress(platform, { running: false, done: true, title: `Error: ${err.message}` });
+   } finally {
+-    // Turn off scrape mode so auto-capture resumes for normal browsing
+-    if (tabId) { try { await tabMessage(tabId, { type: 'SET_SCRAPE_MODE', enabled: false }); } catch {} }
+     if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+     activeSessions = Math.max(0, activeSessions - 1);
+     stopKeepAlive();
+@@ -282,30 +250,17 @@ async function scrapePlatform(platform, baseUrl) {
+ // ── Save conversation ──────────────────────────────────────
+ async function saveConversation(data, source = 'realtime') {
+   try {
+-    const platform      = data.platform || 'unknown';
+-    const external_id   = data.external_id || '';
+-    const messageCount  = data.messages?.length || 0;
+     const result        = await chrome.storage.local.get(STORAGE_KEY);
+     const conversations = result[STORAGE_KEY] || {};
+-    const key           = `${platform}_${external_id}`;
++    const key           = `${data.platform}_${data.external_id}`;
+     const existing      = conversations[key];
+ 
+-    console.log(`[${platform}] saveConversation: ID=${external_id} messages=${messageCount} source=${source} key=${key}`);
+-
+-    // Duplicate detection: if exact key already exists, skip
+-    if (existing) {
+-      console.log(`[${platform}] Duplicate detected — "${data.title}" (ID: ${external_id}) already exists with ${existing.messages?.length || 0} messages`);
+-      return { status: 'skipped', reason: 'duplicate', key };
+-    }
++    if (source === 'bulk' && existing && existing.messages.length >= data.messages.length)
++      return { status: 'skipped', reason: 'no_change' };
+ 
+-    conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: messageCount, source, synced: false };
++    conversations[key] = { ...data, saved_at: new Date().toISOString(), message_count: data.messages.length, source, synced: false };
+     await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+-    console.log(`[${platform}] About to updateMeta — totalKeys=${Object.keys(conversations).length}`);
+     await updateMeta(conversations);
+-    console.log(`[${platform}] Conversation saved: "${data.title}" (ID: ${external_id}, messages: ${messageCount})`);
+-    console.log(`[${platform}] Chat count updated: ${Object.keys(conversations).length} total`);
+-    console.log(`[${platform}] Message count updated: ${messageCount} messages in this conversation`);
+-    console.log(`[${platform}] Platform count updated`);
+ 
+     // Sync to backend immediately (fire and forget — local save already succeeded)
+     const syncResult = await syncToBackend(data);
+@@ -314,10 +269,9 @@ async function saveConversation(data, source = 'realtime') {
+       await chrome.storage.local.set({ [STORAGE_KEY]: conversations });
+     }
+ 
+-    console.log(`[${platform}] Save result: saved | synced: ${syncResult.ok}`);
++    console.log(`[Brain Shadow] ${source === 'realtime' ? '🔴' : '📦'} saved: ${data.title} | synced: ${syncResult.ok}`);
+     return { status: 'saved', key, synced: syncResult.ok };
+   } catch (err) {
+-    console.error(`[${data?.platform || 'unknown'}] Save error: ${err.message}`);
+     return { status: 'error', error: err.message };
+   }
+ }
+@@ -351,7 +305,6 @@ async function updateMeta(conversations) {
+     platforms[conv.platform] = (platforms[conv.platform] || 0) + 1;
+     totalMessages += conv.message_count || 0;
+   });
+-  console.log(`[updateMeta] platforms=${JSON.stringify(platforms)} totalConvs=${allConvs.length} totalMsgs=${totalMessages}`);
+   await chrome.storage.local.set({
+     [META_KEY]: { total_conversations: allConvs.length, total_messages: totalMessages, platforms, last_updated: new Date().toISOString() },
+   });
+@@ -430,6 +383,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+     chrome.storage.local.get(BACKEND_KEY).then(r => sendResponse({ url: r[BACKEND_KEY] || DEFAULT_BACKEND })); return true;
+   }
+   if (message.type === 'TEST_BACKEND') { testBackend(message.url).then(sendResponse); return true; }
++
++  // Sync ALL local conversations to backend (runs in SW — survives popup close)
++  if (message.type === 'SYNC_ALL_TO_BACKEND') {
++    (async () => {
++      const r          = await chrome.storage.local.get([STORAGE_KEY, BACKEND_KEY]);
++      const convs      = Object.values(r[STORAGE_KEY] || {});
++      const backendUrl = (r[BACKEND_KEY] || DEFAULT_BACKEND).replace(/\/$/, '');
++      let synced = 0, failed = 0;
++      for (const conv of convs) {
++        const result = await syncToBackend(conv).catch(err => ({ ok: false, error: err.message }));
++        if (result.ok) {
++          synced++;
++        } else {
++          failed++;
++          console.warn(`[Brain Shadow] Sync failed for "${conv.title}" (${conv.platform}):`, result.error);
++        }
++      }
++      console.log(`[Brain Shadow] SYNC_ALL_TO_BACKEND: ${synced}/${convs.length} synced, ${failed} failed`);
++      sendResponse({ synced, failed, total: convs.length });
++    })();
++    return true;
++  }
+ });
+ 
+ // Clear stale "running" sessions on SW restart
+@@ -444,4 +419,21 @@ chrome.storage.local.get(PROGRESS_KEY).then(r => {
+   chrome.action.setBadgeText({ text: '' });
+ });
+ 
++// On every SW startup: push all locally stored conversations to backend
++(async () => {
++  try {
++    const r          = await chrome.storage.local.get([STORAGE_KEY, BACKEND_KEY]);
++    const convs      = Object.values(r[STORAGE_KEY] || {});
++    if (!convs.length) return;
++    const backendUrl = (r[BACKEND_KEY] || DEFAULT_BACKEND).replace(/\/$/, '');
++    // Test backend first
++    const health = await fetch(`${backendUrl}/health`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
++    if (!health?.ok) return;
++    for (const conv of convs) {
++      await syncToBackend(conv).catch(() => {});
++    }
++    console.log(`[Brain Shadow] Startup sync: pushed ${convs.length} conversations`);
++  } catch {}
++})();
++
+ console.log('[Brain Shadow] Universal background service worker started');
+diff --git a/backend/extractors/universal/fetch.js b/backend/extractors/universal/fetch.js
+index 4f7a985..acde646 100644
+--- a/backend/extractors/universal/fetch.js
++++ b/backend/extractors/universal/fetch.js
+@@ -31,7 +31,7 @@ function chatgptConfig() {
+     platform:   'chatgpt',
+     convUrlRe:  /\/c\/([a-zA-Z0-9_\-]{4,})/,
+     userSel:    ['[data-message-author-role="user"]'],
+-    asstSel:    ['[data-message-author-role="assistant"]', '.markdown', '[class*="prose"]'],
++    asstSel:    ['[data-message-author-role="assistant"]'],
+     streaming:  ['button[data-testid="stop-button"]', 'button[aria-label="Stop generating"]', '.result-streaming'],
+     extractId:  url => url.match(/\/c\/([\w\-]+)/)?.[1] || url,
+     titleClean: t => t.replace(' - ChatGPT', '').replace(' | ChatGPT', ''),
+@@ -39,37 +39,14 @@ function chatgptConfig() {
+ }
+ 
+ function claudeConfig() {
+-  function detectRole(node) {
+-    const text = [node.getAttribute('data-testid') || '', node.getAttribute('aria-label') || '', node.className || ''].join(' ').toLowerCase();
+-    if (text.includes('human') || text.includes('user')) return 'user';
+-    return 'assistant';
+-  }
+   return {
+     platform:   'claude',
+     convUrlRe:  /\/(?:chat|c|conversation)\/([a-zA-Z0-9_\-]{4,})/,
+     userSel:    ['[data-testid*="human"]', '[data-testid*="user"]', '[class*="humanMessage"]'],
+-    asstSel:    ['[data-testid*="assistant"]', '[class*="assistantMessage"]', '[class*="prose"]', '[class*="font-claude-message"]'],
+-    streaming:  ['button[aria-label="Stop generating"]', 'button[aria-label="Stop response"]', '[data-testid="stop-button"]', '.stop-button', '[class*="stop-button"]'],
++    asstSel:    ['[data-testid*="assistant"]', '[class*="assistantMessage"]'],
++    streaming:  ['button[aria-label="Stop generating"]', '[data-testid="stop-button"]'],
+     extractId:  url => { const m = url.match(/\/(?:chat|c|conversation)\/([\w\-]+)/); return m?.[1] || url; },
+     titleClean: t => t.replace(' - Claude', '').replace(' | Claude', ''),
+-    scrapeOverride() {
+-      const root = document.querySelector('main,[role="main"],.chat-main') || document.body;
+-      const selectors = ['[data-testid^="message"]', '[data-testid*="human"]', '[data-testid*="assistant"]', '[class*="message"]', '[class*="bubble"]', '[role="listitem"]', 'article'];
+-      const nodes = new Set();
+-      selectors.forEach(sel => { root.querySelectorAll(sel).forEach(node => { if (node.innerText && node.innerText.trim().length >= 10) nodes.add(node); }); });
+-      if (nodes.size === 0) {
+-        root.querySelectorAll('div,li,article').forEach(node => {
+-          if (!node.innerText) return;
+-          const text = node.innerText.trim();
+-          if (text.length < 20 || node.children.length >= 10) return;
+-          const s = window.getComputedStyle(node);
+-          if (s.display === 'none' || s.visibility === 'hidden') return;
+-          nodes.add(node);
+-        });
+-      }
+-      let messages = Array.from(nodes).map(node => { const content = node.innerText.trim(); if (!content || content.length < 5) return null; return { role: detectRole(node), content }; }).filter(Boolean);
+-      return messages;
+-    },
+   };
+ }
+ 
+@@ -77,9 +54,9 @@ function geminiConfig() {
+   return {
+     platform:   'gemini',
+     convUrlRe:  /\/app\/([a-zA-Z0-9_\-]{4,})/,
+-    userSel:    ['user-query', '.user-query', '[data-message-author-role="user"]', '.user-request-text', '.query-text', '[class*="user-query"]', '[class*="human-turn"]'],
+-    asstSel:    ['model-response', '.model-response', '[data-message-author-role="model"]', '.response-content', '.model-response-text', 'message-content', '[class*="model-response"]', '[class*="ai-turn"]'],
+-    streaming:  ['button[aria-label="Stop generating"]', 'button[aria-label="Stop response"]', '[data-test-id="stop-stream-button"]', '.stop-button', '[class*="stop-button"]', '.loading-indicator', '[class*="loading-indicator"]', 'mat-progress-bar'],
++    userSel:    ['user-query', '.user-query', '[data-message-author-role="user"]', '[class*="user-query"]'],
++    asstSel:    ['model-response', '.model-response', '[data-message-author-role="model"]', '[class*="model-response"]'],
++    streaming:  ['button[aria-label="Stop generating"]', 'button[aria-label="Stop response"]', 'mat-progress-bar'],
+     extractId:  url => { const p = new URL(url).pathname.split('/').filter(Boolean); const i = p.findIndex(x=>x==='app'); return i !== -1 && p[i+1] ? p[i+1] : p[p.length-1]; },
+     titleClean: t => t.replace(' - Gemini', '').replace(' | Gemini', ''),
+   };
+@@ -101,9 +78,9 @@ function deepseekConfig() {
+   return {
+     platform:   'deepseek',
+     convUrlRe:  /\/chat\/s\/([a-zA-Z0-9_\-]{4,})/,
+-    userSel:    ['[class*="userMessage"]', '[class*="user-message"]', '[class*="userContent"]', '[class*="humanMessage"]', '[class*="human-message"]', '[class*="userBubble"]', '[data-role="user"]', '[data-message-role="user"]'],
+-    asstSel:    ['.ds-markdown', '[class*="ds-markdown"]', '[class*="assistantMessage"]', '[class*="assistant-message"]', '[class*="aiMessage"]', '[class*="deepseekMessage"]', '[class*="markdownContent"]', '[class*="responseContent"]', '[data-role="assistant"]', '[data-message-role="assistant"]'],
+-    streaming:  ['[class*="stopButton"]', '[class*="stop-button"]', 'button[aria-label*="Stop" i]', '[class*="generating"]', '[class*="ds-loading"]', '.ds-loading'],
++    userSel:    ['[class*="userMessage"]', '[class*="user-message"]', '[class*="humanMessage"]'],
++    asstSel:    ['.ds-markdown', '[class*="ds-markdown"]', '[class*="assistantMessage"]', '[class*="markdownContent"]'],
++    streaming:  ['[class*="stopButton"]', 'button[aria-label*="Stop" i]', '[class*="generating"]'],
+     extractId:  url => { try { const p = new URL(url).pathname.split('/').filter(Boolean); const i = p.findLastIndex(x=>x==='chat'); if(i!==-1){const after=p.slice(i+1);const u=after.find(s=>s.length>=8&&s!=='s');if(u)return u;} return p[p.length-1]; } catch { return url; } },
+     titleClean: t => t.replace(' - DeepSeek', '').replace(' | DeepSeek', ''),
+   };
+@@ -114,7 +91,7 @@ function mscopilotConfig() {
+     platform:   'copilot',
+     convUrlRe:  /\/(?:c|chats|chat|thread|threads|conversation|conversations)\/([a-zA-Z0-9_\-]{4,})/,
+     userSel:    ['[data-testid*="user-message"]', '[class*="userMessage"]', '[aria-label*="You said" i]'],
+-    asstSel:    ['[data-testid*="copilot-message"]', '[class*="copilotMessage"]', '[class*="BotBubble"]', '[class*="markdown"]'],
++    asstSel:    ['[data-testid*="copilot-message"]', '[class*="copilotMessage"]', '[class*="BotBubble"]'],
+     streaming:  ['button[aria-label="Stop responding"]', '[class*="stopButton"]', '.typing-indicator'],
+     extractId:  url => { try { const m = new URL(url).pathname.match(/\/(?:c|chats|chat|thread)\/([\w\-]+)/); return m?.[1] || new URL(url).searchParams.get('conversationId') || url; } catch { return url; } },
+     titleClean: t => t.replace(' - Microsoft Copilot', '').replace(' | Copilot', ''),
+@@ -197,7 +174,7 @@ function grokConfig() {
+     platform:   'grok',
+     convUrlRe:  /\/(?:chat|c|conversation|conversations)\/([a-zA-Z0-9_\-]{4,})/,
+     userSel:    ['[data-testid*="user-message"]', '[class*="UserMessage"]', '[class*="userBubble"]'],
+-    asstSel:    ['[data-testid*="grok-message"]', '[class*="GrokMessage"]', '[class*="AssistantMessage"]', '[class*="markdown"]'],
++    asstSel:    ['[data-testid*="grok-message"]', '[class*="GrokMessage"]', '[class*="AssistantMessage"]'],
+     streaming:  ['button[aria-label="Stop generating"]', '[class*="StopButton"]', '[class*="thinking"]'],
+     extractId:  url => { const m = url.match(/\/(?:chat|c|conversation)\/([\w\-]+)/); return m?.[1] || url; },
+     titleClean: t => t.replace(' | Grok', '').replace(' - Grok', ''),
+@@ -237,7 +214,6 @@ function init() {
+ 
+   // ── Scroll conversation to load all messages ─────────────
+   function getConversationContainer() {
+-    // Strategy 1: walk up from a message element to find scrollable parent
+     const allSels = [...(config.userSel || []), ...(config.asstSel || [])];
+     const anchor  = allSels.reduce((found, sel) => found || document.querySelector(sel), null);
+     if (anchor) {
+@@ -248,94 +224,21 @@ function init() {
+         el = el.parentElement;
+       }
+     }
+-    // Strategy 2: probe known Gemini virtual-scroll containers
+-    if (config.platform === 'gemini') {
+-      for (const sel of ['[class*="scroll-container"]', '[class*="conversation"]', '[role="region"]', 'main', '[class*="content"]']) {
+-        const el = document.querySelector(sel);
+-        if (!el) continue;
+-        const s = window.getComputedStyle(el);
+-        if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) return el;
+-      }
+-    }
+-    // Strategy 3: find any scrollable element inside main that is tall enough
+-    const main = document.querySelector('main') || document.body;
+-    const candidates = [...main.querySelectorAll('*')].filter(el => {
+-      const s = window.getComputedStyle(el);
+-      return (s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 100;
+-    }).sort((a, b) => b.scrollHeight - a.scrollHeight);
+-    if (candidates.length) return candidates[0];
+     return document.documentElement;
+   }
+ 
+-  function countVisibleMessages() {
+-    let count = 0;
+-    for (const sel of (config.userSel || [])) count += document.querySelectorAll(sel).length;
+-    for (const sel of (config.asstSel || [])) count += document.querySelectorAll(sel).length;
+-    return count;
+-  }
+-
+   function scrollToLoadAllMessages() {
+     return new Promise((resolve) => {
+-      const c   = getConversationContainer();
+-      const maxPasses = 8;
+-      let pass  = 0;
+-      let prevCount = countVisibleMessages();
+-
+-      const safety = setTimeout(resolve, 40_000);
+-
+-      function doPass() {
+-        if (++pass > maxPasses) { clearTimeout(safety); resolve(); return; }
+-
+-        // Scroll all the way up first (triggers Gemini to load earliest messages)
+-        c.scrollTop = 0;
+-        setTimeout(() => {
+-          // Then scroll down in small steps
+-          const step = Math.max(150, Math.floor((c.clientHeight || 600) * 0.4));
+-          let pos = 0;
+-          const tick = () => {
+-            pos += step;
+-            c.scrollTop = pos;
+-            setTimeout(() => {
+-              if (pos < c.scrollHeight) {
+-                tick();
+-              } else {
+-                // Scroll back to top for the next pass
+-                c.scrollTop = 0;
+-                const newCount = countVisibleMessages();
+-                if (newCount > prevCount) {
+-                  prevCount = newCount;
+-                  setTimeout(doPass, 600);
+-                } else {
+-                  clearTimeout(safety); resolve();
+-                }
+-              }
+-            }, 350);
+-          };
+-          setTimeout(tick, 300);
+-        }, 400);
+-      }
+-
+-      // Ensure we start at top and do first pass
++      const c = getConversationContainer();
+       c.scrollTop = 0;
+-      setTimeout(doPass, 300);
++      let pos = 0;
++      const step = Math.max(300, Math.floor((c.clientHeight || 600) * 0.75));
++      const tick = () => { pos += step; c.scrollTop = pos; setTimeout(() => { pos < c.scrollHeight ? tick() : resolve(); }, 500); };
++      setTimeout(tick, 400);
++      setTimeout(resolve, 30_000);
+     });
+   }
+ 
+-  // ── Sibling fallback for DeepSeek dynamic layout ─────────
+-  function findConversationContainer(asstEls) {
+-    if (!asstEls || !asstEls.length) return null;
+-    let card = asstEls[0];
+-    let container = card.parentElement;
+-    const isAsst = (el) => asstEls.some(ae => el === ae || el.contains(ae));
+-    while (container && container !== document.body) {
+-      const siblings = [...container.children];
+-      if (siblings.some(sib => !isAsst(sib) && sib.innerText?.trim().length > 3)) return { container, card };
+-      card = container;
+-      container = container.parentElement;
+-    }
+-    return null;
+-  }
+-
+   // ── Platform custom extractor (e.g. Perplexity) ─────────
+   function scrapeCustom() {
+     if (!config.extractCustom) return null;
+@@ -369,83 +272,91 @@ function init() {
+     return messages.map((msg, i) => ({ ...msg, index: i, timestamp: new Date(now - (messages.length - 1 - i) * STEP).toISOString() }));
+   }
+ 
+-  function scrapeConversation() {
+-    // Platform-specific override (e.g. Claude with dynamic role detection)
+-    if (config.scrapeOverride) {
+-      const messages = config.scrapeOverride();
+-      if (!messages || messages.length === 0) return null;
+-      const deduped = deduplicateConsecutiveRoles(messages);
+-      const last = deduped[deduped.length - 1];
+-      if (!last || last.role !== 'assistant') return null;
+-      const timed = assignRelativeTimestamps(deduped);
+-      const external_id = config.extractId ? config.extractId(location.href) : location.href;
+-      const rawTitle    = document.title || '';
+-      const title       = (config.titleClean ? config.titleClean(rawTitle) : rawTitle).trim() || external_id;
+-      const uCount = timed.filter(m => m.role === 'user').length;
+-      const aCount = timed.filter(m => m.role === 'assistant').length;
+-      console.log(`[${config.platform}] Messages extracted: ${timed.length} total (${uCount}U / ${aCount}A) — "${title}"`);
+-      return { platform: config.platform, external_id, url: location.href, title, message_count: timed.length, messages: timed, captured_at: new Date().toISOString() };
++  // Union every configured selector's matches instead of only using whichever
++// selector happens to match first. Real chat UIs often render messages with
++// slightly different DOM structure depending on content (attachments, code
++// blocks, edited turns, etc.), so a single "first match wins" selector
++// silently drops any message that doesn't fit that one pattern. This also
++// makes the count consistent with PING's readiness check below, which
++// already unions all selectors via a single comma-joined query.
++function queryAllSelectors(selectors) {
++  const seen = new Set();
++  const out  = [];
++  for (const sel of (selectors || [])) {
++    let found;
++    try { found = document.querySelectorAll(sel); } catch { continue; }
++    for (const el of found) {
++      if (seen.has(el)) continue;
++      seen.add(el);
++      out.push(el);
+     }
++  }
++  // Guard against two configured selectors matching a message's outer
++  // container AND an inner content wrapper inside it (e.g. a message bubble
++  // plus a nested markdown div) — that would otherwise double-count the same
++  // message as two overlapping entries. Keep only outermost matches.
++  return out.filter(el => !out.some(other => other !== el && other.contains(el)));
++}
+ 
+-    let userEls = [], asstEls = [];
+-    for (const sel of (config.userSel || [])) { const f = [...document.querySelectorAll(sel)]; if (f.length) { userEls = f; break; } }
+-    for (const sel of (config.asstSel || [])) { const f = [...document.querySelectorAll(sel)]; if (f.length) { asstEls = f; break; } }
+-
+-    // Sibling fallback for DeepSeek (dynamic layout — user messages may lack selectors)
+-    if (config.platform === 'deepseek' && asstEls.length > 0 && userEls.length === 0) {
+-      const found = findConversationContainer(asstEls);
+-      if (found) {
+-        const { container } = found;
+-        const kids = [...container.children];
+-        const nu = [], na = [];
+-        for (const kid of kids) {
+-          const isA = asstEls.some(ae => kid === ae || kid.contains(ae));
+-          const t = kid.innerText?.trim();
+-          if (!t || t.length <= 1) continue;
+-          if (isA) na.push(...asstEls.filter(ae => kid === ae || kid.contains(ae)));
+-          else nu.push(kid);
+-        }
+-        if (nu.length) { userEls = nu; asstEls = na; }
+-      }
+-    }
++// Per-selector match counts, so we can see exactly which configured
++// selector (if any) is finding messages on a given platform right now,
++// without needing to inspect the live DOM by hand.
++function debugSelectorBreakdown(label, selectors) {
++  const breakdown = (selectors || []).map(sel => {
++    let count = 0;
++    try { count = document.querySelectorAll(sel).length; } catch { count = -1; /* invalid selector */ }
++    return `${sel} → ${count}`;
++  });
++  console.log(`[Brain Shadow][debug] ${config.platform} ${label} selectors:\n  ` + breakdown.join('\n  '));
++}
+ 
+-    // Container fallback
++function scrapeConversation() {
++    debugSelectorBreakdown('userSel', config.userSel);
++    debugSelectorBreakdown('asstSel', config.asstSel);
++
++    let userEls = queryAllSelectors(config.userSel);
++    let asstEls = queryAllSelectors(config.asstSel);
++
++    console.log(`[Brain Shadow][debug] ${config.platform} matched: ${userEls.length} user, ${asstEls.length} assistant (after union + ancestor-filter)`);
++
++    // Container fallback — last resort when none of the configured selectors
++    // matched anything. This heuristic just alternates a container's direct
++    // children as user/assistant, which breaks if there's any non-message
++    // child mixed in (date separators, buttons, etc.) — logged loudly since
++    // it's the most likely source of scrambled/wrong role assignment.
+     if (!userEls.length && !asstEls.length) {
++      console.warn(`[Brain Shadow][debug] ${config.platform}: no configured selector matched ANYTHING — falling back to fragile container heuristic. This platform's selectors likely need updating.`);
+       for (const sel of ['[class*="chatContent"]','[class*="messageList"]','[class*="conversation"]','main']) {
+         const c = document.querySelector(sel);
+         if (!c) continue;
+         const children = [...c.children].filter(el => el.innerText?.trim().length > 3);
+-        if (children.length >= 2) { children.forEach((el, i) => (i % 2 === 0 ? userEls : asstEls).push(el)); break; }
++        if (children.length >= 2) {
++          console.warn(`[Brain Shadow][debug] ${config.platform}: container fallback matched "${sel}" with ${children.length} children — alternating even/odd as user/assistant (fragile).`);
++          children.forEach((el, i) => (i % 2 === 0 ? userEls : asstEls).push(el));
++          break;
++        }
+       }
+     }
+ 
+     if (!userEls.length && !asstEls.length) {
+-      console.log(`[${config.platform}] No message elements found (userEls=${userEls.length}, asstEls=${asstEls.length})`);
++      console.warn(`[Brain Shadow][debug] ${config.platform}: scrapeConversation() found NOTHING — returning null (this will show as "empty" in the popup).`);
+       return null;
+     }
+-    console.log(`[${config.platform}] scrapeConversation found userEls=${userEls.length} asstEls=${asstEls.length}`);
+ 
+     const allItems = [
+       ...userEls.map(el => ({ el, role: 'user' })),
+       ...asstEls.map(el => ({ el, role: 'assistant' })),
+-    ].sort((a, b) => {
+-      const pos = a.el.compareDocumentPosition(b.el);
+-      if (pos & Node.DOCUMENT_POSITION_PRECEDING) return -1;
+-      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return 1;
+-      return 0;
+-    });
++    ].sort((a, b) => a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+ 
+     let messages = allItems
+       .map(({ el, role }) => { const content = el.innerText?.trim(); return content && content.length > 3 ? { role, content } : null; })
+       .filter(Boolean);
+ 
+-    console.log(`[${config.platform}] Captured ${allItems.length} raw items → ${messages.length} filtered messages`);
+-    console.log(`[${config.platform}] First role=${messages[0]?.role} Last role=${messages[messages.length-1]?.role} Count=${messages.length}`);
+-
+     messages = deduplicateConsecutiveRoles(messages);
+     const last = messages[messages.length - 1];
+     if (!last || last.role !== 'assistant') {
+-      console.log(`[${config.platform}] Conversation incomplete — skipping (last role: ${last?.role || 'none'})`);
++      console.warn(`[Brain Shadow][debug] ${config.platform}: last message role is "${last?.role || 'none'}", not "assistant" — discarding capture. If role assignment looks backwards below, the fragile container fallback likely mixed up user/assistant order.`);
++      console.log(`[Brain Shadow][debug] ${config.platform} message roles in order: ` + messages.map(m => m.role).join(', '));
+       return null;
+     }
+     messages = assignRelativeTimestamps(messages);
+@@ -454,117 +365,54 @@ function init() {
+     const rawTitle    = document.title || '';
+     const title       = (config.titleClean ? config.titleClean(rawTitle) : rawTitle).trim() || external_id;
+ 
+-    const uCount = messages.filter(m => m.role === 'user').length;
+-    const aCount = messages.filter(m => m.role === 'assistant').length;
+-    console.log(`[${config.platform}] Messages extracted: ${messages.length} total (${uCount}U / ${aCount}A) — "${title}"`);
++    console.log(`[Brain Shadow][debug] ${config.platform} captured ${messages.length} messages. Preview:\n` +
++      messages.map(m => `  [${m.role}] ${m.content.slice(0, 80).replace(/\n/g, ' ')}${m.content.length > 80 ? '…' : ''}`).join('\n'));
++
+     return { platform: config.platform, external_id, url: location.href, title, message_count: messages.length, messages, captured_at: new Date().toISOString() };
+   }
+ 
+   // ── Capture pipeline ─────────────────────────────────────
+   let isCapturing = false;
+-  let scrapeMode = false; // when true, suppress auto-capture (scrapePlatform controls captures)
+ 
++  // scroll=true only when user clicks "Capture Current" — never during auto-capture
+   async function captureAndSend(scroll = false) {
+     if (isCapturing) return { status: 'busy' };
+     isCapturing = true;
+     try {
+-      console.log(`[${config.platform}] Conversation opened — capturing...`);
+       await waitForStreamingToFinish();
+-      if (scroll) {
+-        await scrollToLoadAllMessages();
+-      } else if (!scrapeMode) {
+-        // Auto-capture: do a gentle single pass so Gemini loads at least what's visible
+-        // But skip this during scrape mode — scrapePlatform will send CAPTURE_CURRENT with scroll=true
+-        const c = getConversationContainer();
+-        c.scrollTop = 0;
+-        await new Promise(r => setTimeout(r, 300));
+-        c.scrollTop = c.scrollHeight;
+-        await new Promise(r => setTimeout(r, 1000));
+-      } else {
+-        // Scrape mode: just wait briefly for the page to settle
+-        await new Promise(r => setTimeout(r, 800));
+-      }
++      if (scroll) await scrollToLoadAllMessages();
+       const conversation = scrapeCustom() || scrapeConversation();
+-      if (!conversation) {
+-        console.log(`[${config.platform}] No conversation data to capture`);
+-        return { status: 'empty' };
+-      }
+-      console.log(`[${config.platform}] Sending conversation to background (ID: ${conversation.external_id}, messages: ${conversation.messages.length})`);
++      if (!conversation) return { status: 'empty' };
+       const result = await new Promise((resolve) => {
+         chrome.runtime.sendMessage({ type: 'SAVE_CONVERSATION', payload: conversation },
+           (r) => resolve(chrome.runtime.lastError ? { status: 'error', error: chrome.runtime.lastError.message } : (r || { status: 'unknown' })));
+       });
+-      console.log(`[${config.platform}] Save result: ${result.status}${result.reason ? ' ('+result.reason+')' : ''}${result.synced ? ' · synced' : ''}`);
++      console.log(`[Brain Shadow] Captured: ${conversation.title} — ${result.status}${result.synced ? ' (synced to backend)' : ''}`);
+       return { ...result, title: conversation.title, message_count: conversation.messages.length };
+     } finally { isCapturing = false; }
+   }
+ 
+   // ── MutationObserver ─────────────────────────────────────
+   let debounceTimer = null;
+-  const observer = new MutationObserver(() => {
+-    if (scrapeMode) return; // suppress during scrape mode
+-    clearTimeout(debounceTimer);
+-    debounceTimer = setTimeout(() => captureAndSend(false), 3000);
+-  });
++  const observer = new MutationObserver(() => { clearTimeout(debounceTimer); debounceTimer = setTimeout(captureAndSend, 3000); });
+ 
+   function waitForChatAndObserve() {
+     observer.observe(document.querySelector('main') || document.body, { childList: true, subtree: true });
+     console.log(`[Brain Shadow] Observer attached (${config.platform})`);
+-    // Auto-capture: only fire if NOT in scrape mode
+-    setTimeout(() => {
+-      if (!scrapeMode) {
+-        captureAndSend(false);
+-      } else {
+-        console.log(`[${config.platform}] Auto-capture suppressed (scrape mode active)`);
+-      }
+-    }, 3500);
++    setTimeout(captureAndSend, 3500);
+   }
+ 
+   // ── SPA navigation watcher ───────────────────────────────
+   let lastUrl = location.href;
+   new MutationObserver(() => {
+-    if (location.href !== lastUrl) {
+-      console.log(`[${config.platform}] URL changed: ${lastUrl} → ${location.href}`);
+-      lastUrl = location.href;
+-      if (!scrapeMode) {
+-        console.log(`[${config.platform}] SPA navigation — auto-capturing...`);
+-        setTimeout(() => captureAndSend(true), 4000);
+-      } else {
+-        console.log(`[${config.platform}] SPA navigation suppressed (scrape mode active)`);
+-      }
+-    }
++    if (location.href !== lastUrl) { lastUrl = location.href; setTimeout(captureAndSend, 4000); }
+   }).observe(document, { subtree: true, childList: true });
+ 
+   // ── Sidebar: get conversation list ───────────────────────
+   function extractRecents() {
+-    // DeepSeek: localStorage FIRST (sidebar isn't <a> tags)
+-    if (host === 'chat.deepseek.com') {
+-      try {
+-        const dsSeen = new Set(), dsThreads = [];
+-        for (let i = 0; i < localStorage.length; i++) {
+-          const key = localStorage.key(i);
+-          let raw; try { raw = JSON.parse(localStorage.getItem(key)); } catch { continue; }
+-          const data = raw?.state ?? raw;
+-          const candidates = typeof data === 'object' && data !== null ? Object.values(data) : [data];
+-          for (const val of candidates) {
+-            if (!Array.isArray(val)) continue;
+-            for (const item of val) {
+-              if (typeof item !== 'object' || !item) continue;
+-              const id    = item.id || item.sessionId || item.chatId || item.conversationId;
+-              const title = item.title || item.name || item.subject || `DeepSeek chat`;
+-              if (!id || typeof id !== 'string' || !/^[a-zA-Z0-9_\-]{6,}$/.test(id)) continue;
+-              const url = `${location.origin}/a/chat/s/${id}`;
+-              if (!dsSeen.has(url)) { dsSeen.add(url); dsThreads.push({ url, title: String(title).slice(0, 120) }); }
+-            }
+-          }
+-        }
+-        if (dsThreads.length > 0) { console.log(`[Brain Shadow] DeepSeek localStorage: ${dsThreads.length} found`); return dsThreads; }
+-      } catch {}
+-    }
+-
+     const allLinks = Array.from(document.querySelectorAll('a[href]'));
+-    console.log(`[${config.platform}] <a> tags: ${allLinks.length}`);
+-    console.log(`[${config.platform}] ALL hrefs:\n` + [...new Set(allLinks.map(a => a.getAttribute('href')))].slice(0, 50).join('\n'));
++    console.log(`[Brain Shadow] ${config.platform} <a> tags: ${allLinks.length}`);
++    console.log('[Brain Shadow] ALL hrefs:\n' + [...new Set(allLinks.map(a => a.getAttribute('href')))].slice(0, 50).join('\n'));
+ 
+     const seen = new Set(), threads = [];
+ 
+@@ -580,27 +428,47 @@ function init() {
+       threads.push({ url: canonical, title: title.slice(0, 120) });
+     }
+ 
+-    // Pass 2 — broad UUID scan (always runs to catch sidebar links regex misses)
+-    const regexCount = threads.length;
+-    {
+-      console.log(`[Brain Shadow] Broad UUID scan...`);
++    // Pass 2 — broad UUID fallback
++    if (threads.length === 0) {
++      console.warn('[Brain Shadow] Regex matched 0 — broad UUID scan');
+       const SKIP = /\/(login|signup|settings|help|about|privacy|terms|logout|new|upgrade|billing|home|discover)\b/i;
+       for (const link of allLinks) {
+         let u; try { u = new URL(link.href); } catch { continue; }
+         if (u.origin !== location.origin) continue;
+         if (SKIP.test(u.pathname) || u.pathname.length < 4) continue;
+-        if (!u.pathname.split('/').filter(Boolean).some(s => /^[a-zA-Z0-9_\-]{6,}$/.test(s))) continue;
++        if (!u.pathname.split('/').filter(Boolean).some(s => /^[a-zA-Z0-9_\-]{8,}$/.test(s))) continue;
+         const canonical = `${u.origin}${u.pathname}`;
+         if (seen.has(canonical)) continue; seen.add(canonical);
+-        const title = link.getAttribute('aria-label')?.trim() || link.querySelector('span,p,div')?.innerText?.trim() || link.innerText?.trim() || `Chat ${threads.length + 1}`;
++        const title = link.getAttribute('aria-label')?.trim() || link.innerText?.trim() || `Chat ${threads.length + 1}`;
+         threads.push({ url: canonical, title: title.slice(0, 120) });
+       }
+-      const broadFound = threads.length - regexCount;
+-      if (broadFound > 0) console.log(`[Brain Shadow] Broad scan found ${broadFound} additional`);
++      if (threads.length > 0) console.log(`[Brain Shadow] Broad scan found ${threads.length}`);
++    }
++
++    // DeepSeek: also try localStorage
++    if (threads.length === 0 && host === 'chat.deepseek.com') {
++      try {
++        for (let i = 0; i < localStorage.length; i++) {
++          const key = localStorage.key(i);
++          let raw; try { raw = JSON.parse(localStorage.getItem(key)); } catch { continue; }
++          const data = raw?.state ?? raw;
++          const candidates = typeof data === 'object' && data !== null ? Object.values(data) : [data];
++          for (const val of candidates) {
++            if (!Array.isArray(val)) continue;
++            for (const item of val) {
++              if (typeof item !== 'object' || !item) continue;
++              const id    = item.id || item.sessionId || item.chatId;
++              const title = item.title || item.name || `DeepSeek chat`;
++              if (!id || !/^[a-zA-Z0-9_\-]{8,}$/.test(id)) continue;
++              if (!seen.has(id)) { seen.add(id); threads.push({ url: `${location.origin}/chat/s/${id}`, title: String(title).slice(0, 120) }); }
++            }
++          }
++        }
++        if (threads.length > 0) console.log(`[Brain Shadow] DeepSeek localStorage: ${threads.length}`);
++      } catch {}
+     }
+ 
+-    console.log(`[${config.platform}] Conversation discovered: ${threads.length} total`);
+-    threads.forEach((t, i) => console.log(`[${config.platform}]   [${i+1}] ${t.title} — ${t.url}`));
++    console.log(`[Brain Shadow] ${config.platform} conversations: ${threads.length}`);
+     return threads;
+   }
+ 
+@@ -617,15 +485,11 @@ function init() {
+       }
+     }
+     if (!sidebar) {
+-      const sels = ['nav','aside','[role="navigation"]','[class*="sidebar"]','[class*="Sidebar"]','[class*="history"]','[class*="chatList"]','[aria-label*="history" i]','[aria-label*="Recent" i]'];
+-      if (config.platform === 'gemini' || config.platform === 'deepseek') sels.push('[class*="nav"]','[class*="menu"]');
+-      if (config.platform === 'deepseek') sels.push('[class*="historyList"]','[class*="sessionList"]');
+-      for (const sel of sels) {
+-        for (const el of document.querySelectorAll(sel)) {
+-          const s = window.getComputedStyle(el);
+-          if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) { sidebar = el; break; }
+-        }
+-        if (sidebar) break;
++      for (const sel of ['nav','aside','[role="navigation"]','[class*="sidebar"]','[class*="Sidebar"]','[class*="history"]','[class*="chatList"]']) {
++        const el = document.querySelector(sel);
++        if (!el) continue;
++        const s = window.getComputedStyle(el);
++        if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 20) { sidebar = el; break; }
+       }
+     }
+     const target = sidebar || document.documentElement;
+@@ -634,7 +498,7 @@ function init() {
+       const tick = setInterval(() => {
+         target.scrollBy(0, target.clientHeight || 500); count++;
+         const newH = target.scrollHeight;
+-        if (newH === lastH || count >= 100) { clearInterval(tick); target.scrollTo(0, 0); setTimeout(resolve, 400); }
++        if (newH === lastH || count >= 80) { clearInterval(tick); target.scrollTo(0, 0); setTimeout(resolve, 400); }
+         lastH = newH;
+       }, 400);
+     });
+@@ -642,12 +506,6 @@ function init() {
+ 
+   // ── Message listener ─────────────────────────────────────
+   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+-    if (request.type === 'SET_SCRAPE_MODE') {
+-      scrapeMode = !!request.enabled;
+-      console.log(`[${config.platform}] Scrape mode: ${scrapeMode ? 'ON (auto-capture suppressed)' : 'OFF'}`);
+-      sendResponse({ ok: true, scrapeMode });
+-      return true;
+-    }
+     if (request.type === 'GET_SIDEBAR_CHATS') {
+       scrollSidebarToLoadAll().then(() => sendResponse(extractRecents()));
+       return true;
+diff --git a/backend/extractors/universal/popup.html b/backend/extractors/universal/popup.html
+index 98a6e3a..304d30d 100644
+--- a/backend/extractors/universal/popup.html
++++ b/backend/extractors/universal/popup.html
+@@ -134,7 +134,6 @@
+     </div>
+     <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
+     <div class="progress-title" id="progressTitle">Starting…</div>
+-    <div class="progress-title" id="progressDetail" style="font-size:9px;color:var(--accent2);margin-top:1px"></div>
+   </div>
+ 
+   <div class="actions">
+diff --git a/backend/extractors/universal/popup.js b/backend/extractors/universal/popup.js
+index 4c425a0..3fec8f2 100644
+--- a/backend/extractors/universal/popup.js
++++ b/backend/extractors/universal/popup.js
+@@ -51,7 +51,6 @@ async function testBackend(url) {
+     const res = await fetch(`${backendUrl}/health`);
+     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+     setBackendStatus('ok', '✓ Backend connected — syncing all chats…');
+-    // Sync all unsynced conversations directly from popup context
+     await syncAllToBackend(backendUrl);
+     return true;
+   } catch (err) {
+@@ -61,28 +60,24 @@ async function testBackend(url) {
+   }
+ }
+ 
+-async function syncAllToBackend(backendUrl) {
+-  const convs = await chrome.runtime.sendMessage({ type: 'GET_ALL_CONVERSATIONS' });
+-  if (!convs?.length) return;
+-  // Only sync conversations that haven't been synced yet
+-  const unsynced = convs.filter(c => !c.synced);
+-  if (!unsynced.length) return;
+-  let synced = 0;
+-  for (const conv of unsynced) {
+-    try {
+-      const res = await fetch(`${backendUrl}/api/import/capture`, {
+-        method: 'POST',
+-        headers: { 'Content-Type': 'application/json' },
+-        body: JSON.stringify(conv),
+-      });
+-      if (res.ok) synced++;
+-    } catch {}
+-  }
+-  if (synced > 0) {
+-    setBackendStatus('ok', `✓ Synced ${synced} / ${convs.length} chats to MongoDB`);
+-    showToast(`Synced ${synced} chats to MongoDB ✅`, 'success');
+-    await loadStats();
+-    await loadRecentConversations();
++async function syncAllToBackend(_backendUrl) {
++  // Delegate to background service worker so sync completes even if popup closes
++  try {
++    const result = await chrome.runtime.sendMessage({ type: 'SYNC_ALL_TO_BACKEND' });
++    if (!result) return;
++    if (result.synced > 0) {
++      setBackendStatus('ok', `✓ Synced ${result.synced} / ${result.total} chats to MongoDB`);
++      showToast(`Synced ${result.synced} chats to MongoDB ✅`, 'success');
++      await loadStats();
++      await loadRecentConversations();
++    } else if (result.total > 0) {
++      setBackendStatus('error', `✗ 0/${result.total} synced — check backend logs`);
++    }
++    if (result.failed > 0) {
++      console.warn(`[Brain Shadow] ${result.failed} conversations failed to sync — open background inspector for details`);
++    }
++  } catch (e) {
++    console.warn('[Brain Shadow] syncAllToBackend error:', e.message);
+   }
+ }
+ 
+@@ -156,17 +151,6 @@ function renderProgress(prog) {
+     document.getElementById('progressLabel').textContent =
+       currentSess.running ? `Scraping ${PLATFORM_LABELS[currentPlatform] || currentPlatform}…` :
+       currentSess.done    ? '✅ Done' : 'Starting…';
+-    // Show saved/skipped/duplicate/failed detail
+-    const detail = document.getElementById('progressDetail');
+-    if (detail) {
+-      const parts = [];
+-      if (currentSess.savedCount > 0) parts.push(`${currentSess.savedCount} saved`);
+-      if (currentSess.duplicateCount > 0) parts.push(`${currentSess.duplicateCount} duplicates`);
+-      if (currentSess.skippedCount > 0) parts.push(`${currentSess.skippedCount} skipped`);
+-      if (currentSess.emptyCount > 0) parts.push(`${currentSess.emptyCount} empty`);
+-      if (currentSess.failedCount > 0) parts.push(`${currentSess.failedCount} failed`);
+-      detail.textContent = parts.join(' · ') || '';
+-    }
+   } else if (!anyRunning) {
+     progSection.classList.remove('visible');
+   }
+@@ -282,18 +266,12 @@ document.getElementById('btnCaptureCurrent').addEventListener('click', async ()
+ document.getElementById('btnExport').addEventListener('click', async () => {
+   const data = await chrome.runtime.sendMessage({ type: 'EXPORT_DATA' });
+   if (!data?.conversations?.length) { showToast('No data to export', 'error'); return; }
+-  const blob  = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+-  const url   = URL.createObjectURL(blob);
+-  const fname = `${EXPORT_NAME}_${new Date().toISOString().split('T')[0]}.json`;
+-  // Use chrome.downloads API — a.click() in MV3 popups is unreliable
+-  chrome.downloads.download({ url, filename: fname, saveAs: true }, (id) => {
+-    URL.revokeObjectURL(url);
+-    if (chrome.runtime.lastError || id === undefined) {
+-      showToast(`Export failed: ${chrome.runtime.lastError?.message || 'unknown error'}`, 'error');
+-    } else {
+-      showToast(`Exported ${data.conversations.length} conversations`, 'success');
+-    }
+-  });
++  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
++  const url  = URL.createObjectURL(blob);
++  const a    = document.createElement('a');
++  a.href = url; a.download = `${EXPORT_NAME}_${new Date().toISOString().split('T')[0]}.json`;
++  a.click(); URL.revokeObjectURL(url);
++  showToast(`Exported ${data.conversations.length} conversations`, 'success');
+ });
+ 
+ // ── Clear Data ─────────────────────────────────────────────

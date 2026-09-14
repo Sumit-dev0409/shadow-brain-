@@ -2,10 +2,10 @@ const Conversation = require('../models/conversation.model');
 const logger = require('../utils/logger');
 
 class ConversationService {
-  async createOrUpdate(data) {
+  async createOrUpdate(data, userId) {
     const { platform, external_id, title, messages, saved_at, captured_at, url } = data;
 
-    logger.info(`DEBUG: [BEFORE DB SAVE] ExternalId: ${external_id}, Platform: ${platform}`);
+    logger.info(`DEBUG: [BEFORE DB SAVE] ExternalId: ${external_id}, Platform: ${platform}, UserId: ${userId}`);
 
     const normalizedPlatform = platform ? platform.toLowerCase() : 'chatgpt';
 
@@ -21,6 +21,7 @@ class ConversationService {
     const newHasContent = newMessages.some(m => (m.content || '').trim().length > 0);
 
     const conversationData = {
+      userId,
       externalId: external_id,
       platform: normalizedPlatform,
       title: title || 'Untitled Conversation',
@@ -32,18 +33,18 @@ class ConversationService {
     };
 
     // messages must appear in $set OR $setOnInsert — never both (MongoDB rejects that)
+    const setOnInsert = {};
     if (newHasContent) {
       conversationData.messages = newMessages;
-    }
-
-    const setOnInsert = { status: 'PENDING' };
-    if (!newHasContent) {
+      conversationData.status = 'PENDING';
+    } else {
+      setOnInsert.status = 'PENDING';
       setOnInsert.messages = newMessages;
     }
 
     try {
       const result = await Conversation.findOneAndUpdate(
-        { externalId: external_id, platform: normalizedPlatform },
+        { externalId: external_id, platform: normalizedPlatform, userId },
         {
           $set: conversationData,
           $setOnInsert: setOnInsert,
@@ -58,12 +59,16 @@ class ConversationService {
     }
   }
 
-  async getById(id) {
-    return await Conversation.findById(id);
+  async getById(id, userId) {
+    const filter = { _id: id };
+    if (userId) filter.userId = userId;
+    return await Conversation.findOne(filter);
   }
 
-  async getByExternalId(externalId, platform) {
-    return await Conversation.findOne({ externalId, platform });
+  async getByExternalId(externalId, platform, userId) {
+    const filter = { externalId, platform };
+    if (userId) filter.userId = userId;
+    return await Conversation.findOne(filter);
   }
 
   async updateStatus(id, status, error = null) {

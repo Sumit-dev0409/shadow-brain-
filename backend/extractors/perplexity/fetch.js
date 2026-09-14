@@ -95,6 +95,43 @@ function scrollToLoadAllMessages() {
 }
 
 // ── Helpers ────────────────────────────────────────────────
+/**
+ * Check if content looks like a UUID, hash, or conversation ID.
+ * Filters out: UUIDs, short hex strings, conversation slugs without spaces.
+ */
+function looksLikeConversationId(text) {
+  if (!text) return false;
+  // Remove whitespace to check pattern
+  const normalized = text.replace(/\s+/g, '');
+  
+  // UUID pattern: 8-4-4-4-12 hex digits
+  if (/^[a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}$/i.test(normalized)) {
+    return true;
+  }
+  
+  // Hex-only strings 32+ chars (typical UUID without dashes)
+  if (/^[a-f0-9]{32,}$/i.test(normalized)) {
+    return true;
+  }
+  
+  // Short hex strings that are unlikely to be real messages (like "316a8535")
+  if (/^[a-f0-9\s]{8,20}$/.test(text) && /[a-f0-9]/.test(text) && text.replace(/\s/g, '').length < 20) {
+    return true;
+  }
+  
+  // Conversation slug pattern: "what-is-ml-AbCdEfGh" (title-id format)
+  if (/^[a-z0-9\-]{20,}$/.test(normalized) && normalized.split('-').length >= 2) {
+    const parts = normalized.split('-');
+    const lastPart = parts[parts.length - 1];
+    // If the last part is 8+ hex chars, likely a hash suffix
+    if (/^[a-z0-9]{8,}$/.test(lastPart)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
 function deduplicateConsecutiveRoles(messages) {
   if (!messages.length) return messages;
   const out = [messages[0]];
@@ -118,39 +155,112 @@ function extractPerplexityId(url) {
   } catch { return url; }
 }
 
+function findConversationContainer(asstEls) {
+  if (!asstEls || !asstEls.length) return null;
+  let card = asstEls[0];
+  let container = card.parentElement;
+  const isAssistant = (el) => asstEls.some(ae => el === ae || el.contains(ae));
+  while (container && container !== document.body) {
+    const siblings = [...container.children];
+    const hasUserSibling = siblings.some(sib => !isAssistant(sib) && sib.innerText?.trim().length > 3);
+    if (hasUserSibling) return { container, card };
+    card = container;
+    container = container.parentElement;
+  }
+  return null;
+}
+
 // ── Core scraper ───────────────────────────────────────────
 function scrapeConversation() {
   // Perplexity: user query + AI answer pairs
+  // Updated selectors to be more specific and robust
   const USER_SEL = [
+    // First try very specific Perplexity user message containers
+    '[class*="QueryCont"]',      // Common pattern in Perplexity
+    '[class*="userQuery"]',
+    '[class*="user-query"]',
+    '[data-testid*="user-message"]',
     '[data-testid*="user"]',
-    '[class*="UserQuery"]',   '[class*="user-query"]',
-    '[class*="userQuery"]',   '[class*="query-text"]',
-    '[class*="queryText"]',   '[class*="humanMessage"]',
-    'textarea[readonly]',     // sometimes the query is shown as readonly
+    '[class*="UserQuery"]',
+    '[class*="query-text"]',
+    '[class*="queryText"]',
+    '[class*="humanMessage"]',
+    // Fallback to textarea if shown as readonly
+    'textarea[readonly]',
   ];
+  
   const ASST_SEL = [
     '[data-testid*="answer"]',
-    '[class*="AnswerBody"]',  '[class*="answer-body"]',
-    '[class*="answerBody"]',  '[class*="prose"]',
-    '[class*="markdown"]',    '[class*="aiResponse"]',
-    '[class*="ai-response"]', '[class*="ResponseBody"]',
+    '[class*="AnswerBody"]',
+    '[class*="answer-body"]',
+    '[class*="answerBody"]',
+    '[class*="prose"]',
+    '[class*="markdown"]',
+    '[class*="aiResponse"]',
+    '[class*="ai-response"]',
+    '[class*="ResponseBody"]',
   ];
 
   let userEls = [], asstEls = [];
   for (const sel of USER_SEL) { const f = [...document.querySelectorAll(sel)]; if (f.length) { userEls = f; break; } }
   for (const sel of ASST_SEL) { const f = [...document.querySelectorAll(sel)]; if (f.length) { asstEls = f; break; } }
 
-  // Container fallback
-  if (!userEls.length && !asstEls.length) {
-    for (const sel of ['[class*="threadContent"]','[class*="thread-content"]','main','[class*="conversation"]']) {
-      const c = document.querySelector(sel);
-      if (!c) continue;
-      const children = [...c.children].filter(el => el.innerText?.trim().length > 3);
-      if (children.length >= 2) { children.forEach((el, i) => (i % 2 === 0 ? userEls : asstEls).push(el)); break; }
+  // Sibling & LCA fallback (dynamic layouts)
+  if (asstEls.length > 0 && userEls.length === 0) {
+    const found = findConversationContainer(asstEls);
+    if (found) {
+      const { container } = found;
+      const children = [...container.children];
+      const newUserEls = [];
+      const newAsstEls = [];
+      for (const child of children) {
+        const isAsst = asstEls.some(ae => child === ae || child.contains(ae));
+        const text = child.innerText?.trim();
+        if (!text || text.length <= 1) continue;
+        // CRITICAL: Filter out elements that look like conversation IDs
+        if (looksLikeConversationId(text)) continue;
+        if (isAsst) {
+          const myAsst = asstEls.filter(ae => child === ae || child.contains(ae));
+          newAsstEls.push(...myAsst);
+        } else {
+          newUserEls.push(child);
+        }
+      }
+      if (newUserEls.length > 0) {
+        userEls = newUserEls;
+        asstEls = newAsstEls;
+      }
     }
   }
 
-  if (!userEls.length && !asstEls.length) return null;
+  // Container fallback with improved detection
+  if (!userEls.length && !asstEls.length) {
+    const containerSels = [
+      '[class*="threadContent"]',
+      '[class*="thread-content"]',
+      '[class*="messageList"]',
+      '[class*="chatContent"]',
+      'main',
+      '[class*="conversation"]',
+    ];
+    for (const sel of containerSels) {
+      const c = document.querySelector(sel);
+      if (!c) continue;
+      const children = [...c.children].filter(el => {
+        const text = el.innerText?.trim();
+        return text && text.length > 3 && !looksLikeConversationId(text);
+      });
+      if (children.length >= 2) { 
+        children.forEach((el, i) => (i % 2 === 0 ? userEls : asstEls).push(el)); 
+        break; 
+      }
+    }
+  }
+
+  if (!userEls.length && !asstEls.length) {
+    console.warn('[Brain Shadow] Perplexity: Could not find user or assistant elements');
+    return null;
+  }
 
   const allItems = [
     ...userEls.map(el => ({ el, role: 'user' })),
@@ -158,12 +268,27 @@ function scrapeConversation() {
   ].sort((a, b) => a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
 
   let messages = allItems
-    .map(({ el, role }) => { const content = el.innerText?.trim(); return content && content.length > 3 ? { role, content } : null; })
+    .map(({ el, role }) => { 
+      const content = el.innerText?.trim(); 
+      // Validate content is not a conversation ID or empty
+      if (!content || content.length <= 3 || looksLikeConversationId(content)) {
+        return null;
+      }
+      return { role, content }; 
+    })
     .filter(Boolean);
+
+  if (messages.length === 0) {
+    console.warn('[Brain Shadow] Perplexity: All extracted messages were invalid (possibly UUIDs)');
+    return null;
+  }
 
   messages = deduplicateConsecutiveRoles(messages);
   const last = messages[messages.length - 1];
-  if (!last || last.role !== 'assistant') return null;
+  if (!last || last.role !== 'assistant') {
+    console.warn('[Brain Shadow] Perplexity: Last message is not from assistant');
+    return null;
+  }
   messages = assignRelativeTimestamps(messages);
 
   const external_id = extractPerplexityId(location.href);

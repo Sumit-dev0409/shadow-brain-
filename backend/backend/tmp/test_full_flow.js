@@ -52,7 +52,8 @@ async function runTest() {
       saved_at: new Date().toISOString()
     };
 
-    const conversation = await conversationService.createOrUpdate(payload);
+    const mockUserId = new mongoose.Types.ObjectId();
+    const conversation = await conversationService.createOrUpdate(payload, mockUserId);
     console.log(`✔ Data saved with status: ${conversation.status}`);
     
     if (conversation.status !== 'PENDING') {
@@ -82,7 +83,7 @@ async function runTest() {
       ]
     };
 
-    const updatedConvo = await conversationService.createOrUpdate(updatePayload);
+    const updatedConvo = await conversationService.createOrUpdate(updatePayload, mockUserId);
     console.log(`✔ Update saved. New status: ${updatedConvo.status}`);
     
     if (updatedConvo.status !== 'PENDING') {
