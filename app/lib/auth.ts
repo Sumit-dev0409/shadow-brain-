@@ -345,8 +345,6 @@ export function setSession(email: string, token?: string) {
       console.log(`[JWT-SET-SESSION]   Verify readback: ${window.localStorage.getItem('shadowbrain_token')?.slice(0, 40)}...`);
     } else {
       window.localStorage.removeItem('shadowbrain_token');
-      console.error(`[JWT-SET-SESSION] ❌ Token is falsy — REMOVED 'shadowbrain_token' from localStorage`);
-      console.error(`[JWT-SET-SESSION]   This means the extension bridge will never get a token`);
     }
   }
 }

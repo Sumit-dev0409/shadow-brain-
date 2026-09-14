@@ -20,7 +20,7 @@ import {
   getSavedEmail,
   setSession,
 } from "@/app/lib/auth";
-import { googleLogin } from "@/app/lib/api";
+import { googleLogin, passwordAuth } from "@/app/lib/api";
 
 interface AuthScreenProps {
   onAuthenticated: (email: string) => void;
@@ -135,16 +135,33 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
     setError(null);
     setLoading(true);
 
-    const result =
-      mode === "login"
-        ? await login(email, password)
-        : await signUp(email, password, confirmPassword);
+    let result: { ok: true; email: string } | { ok: false; error: string };
+    let backendToken = "";
+    try {
+      if (mode === "signup" && password !== confirmPassword) {
+        result = { ok: false, error: "Passwords do not match." };
+      } else {
+        try {
+          const response = await passwordAuth(email, password, mode);
+          backendToken = response.token;
+          result = { ok: true, email: response.user.email };
+        } catch {
+          result = mode === "signup"
+            ? await signUp(email, password, confirmPassword)
+            : await login(email, password);
+        }
+      }
+    } catch (authError) {
+      result = { ok: false, error: authError instanceof Error ? authError.message : "Authentication failed." };
+    }
 
     setLoading(false);
     if (!result.ok) {
       setError(result.error);
       return;
     }
+
+    setSession(result.email, backendToken);
 
     if (rememberMe) {
       saveRememberMe(result.email);

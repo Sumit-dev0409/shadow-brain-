@@ -7,7 +7,7 @@ const nextConfig: NextConfig = {
       "@": path.resolve(__dirname),
     },
   },
-  allowedDevOrigins: ["192.168.1.*"],
+  allowedDevOrigins: ["192.168.1.*", "10.58.212.*"],
 };
 
 export default nextConfig;

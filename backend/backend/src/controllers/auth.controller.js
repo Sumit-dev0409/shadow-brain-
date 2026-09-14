@@ -7,6 +7,7 @@ const {
   generateDemoToken,
   demoAuthCheck,
 } = require('../middleware/demo-auth.middleware');
+const crypto = require('crypto');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 if (!GOOGLE_CLIENT_ID) {
@@ -32,6 +33,59 @@ function signSession(user) {
     { expiresIn: '7d' }
   );
 }
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
+  const derivedKey = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${derivedKey}`;
+}
+
+function verifyPassword(password, storedHash) {
+  const [salt, expectedHex] = (storedHash || '').split(':');
+  if (!salt || !expectedHex) return false;
+  const actual = crypto.scryptSync(password, salt, 64);
+  const expected = Buffer.from(expectedHex, 'hex');
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+const passwordAuth = async (req, res) => {
+  try {
+    const { email, password, mode } = req.body || {};
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!normalizedEmail || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+
+    if (mode === 'signup') {
+      const existing = await User.findOne({ email: normalizedEmail }).select('+passwordHash');
+      if (existing) return res.status(409).json({ message: 'An account with this email already exists' });
+
+      const user = await User.create({
+        googleId: `password:${normalizedEmail}`,
+        email: normalizedEmail,
+        name: normalizedEmail.split('@')[0],
+        passwordHash: hashPassword(password),
+        lastLoginAt: new Date(),
+      });
+      const token = signSession(user);
+      res.cookie(SESSION_COOKIE, token, { ...cookieOptions, maxAge: COOKIE_MAX_AGE_MS });
+      return res.json({ token, user: { email: user.email, name: user.name } });
+    }
+
+    const user = await User.findOne({ email: normalizedEmail }).select('+passwordHash');
+    if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    user.lastLoginAt = new Date();
+    await user.save();
+    const token = signSession(user);
+    res.cookie(SESSION_COOKIE, token, { ...cookieOptions, maxAge: COOKIE_MAX_AGE_MS });
+    return res.json({ token, user: { email: user.email, name: user.name, avatar: user.avatar } });
+  } catch (error) {
+    logger.error(`[Auth] Password auth failed: ${error.message}`);
+    return res.status(500).json({ message: 'Authentication failed' });
+  }
+};
 
 const googleLogin = async (req, res, next) => {
   try {
@@ -121,4 +175,4 @@ const logout = (req, res) => {
   res.json({ ok: true });
 };
 
-module.exports = { googleLogin, me, logout };
+module.exports = { googleLogin, passwordAuth, me, logout };

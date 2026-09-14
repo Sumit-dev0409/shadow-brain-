@@ -4,6 +4,20 @@ function toApiUrl(path: string): string {
   return API_BASE ? `${API_BASE}${path}` : path;
 }
 
+export async function passwordAuth(email: string, password: string, mode: 'login' | 'signup') {
+  const res = await fetch(toApiUrl('/api/auth/password'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ email, password, mode }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.token || !data?.user?.email) {
+    throw new Error(data?.message || `Authentication failed (${res.status})`);
+  }
+  return data as { token: string; user: { email: string; name?: string; avatar?: string } };
+}
+
 export interface ApiMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -94,6 +108,7 @@ export async function searchMemory(query: string, platforms?: string[]): Promise
     const res = await fetch(url, {
       method: 'POST',
       headers,
+      credentials: 'include',
       body: JSON.stringify({ query, platforms: platforms && platforms.length > 0 ? platforms : undefined }),
     });
     console.log('[api.searchMemory] response status', { status: res.status, statusText: res.statusText });

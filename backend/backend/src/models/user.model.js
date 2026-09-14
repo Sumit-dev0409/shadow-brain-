@@ -4,7 +4,7 @@ const userSchema = new mongoose.Schema(
   {
     googleId: {
       type: String,
-      required: true,
+      sparse: true,
       unique: true,
       index: true,
     },
@@ -21,6 +21,10 @@ const userSchema = new mongoose.Schema(
     },
     avatar: {
       type: String,
+    },
+    passwordHash: {
+      type: String,
+      select: false,
     },
     lastLoginAt: {
       type: Date,

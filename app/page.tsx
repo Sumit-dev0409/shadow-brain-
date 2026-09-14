@@ -147,8 +147,7 @@ export default function Home() {
         console.log(`[JWT-STEP-3]   postMessage dispatched`);
         console.log(`[JWT-STEP-3]   Note: #shadowbrain-auth-bridge div will render after React re-render (token state is now set)`);
       } else {
-        console.error(`[JWT-STEP-3] ❌ FAIL — NO token in localStorage — postMessage NOT sent`);
-        console.error(`[JWT-STEP-3]   The extension will never receive the JWT`);
+        console.log(`[JWT-STEP-3] No extension token available for this local session`);
       }
     }
 
