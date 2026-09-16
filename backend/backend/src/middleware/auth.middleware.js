@@ -1,41 +1,53 @@
+const jwt = require('jsonwebtoken');
 const ApiKey = require('../models/api-key.model');
 const logger = require('../utils/logger');
 
 const authMiddleware = async (req, res, next) => {
-  const apiKey = req.header('X-API-KEY');
-
-  console.log(`[AUTH] Request to ${req.method} ${req.originalUrl}`);
-  console.log(`[AUTH] X-API-KEY header: ${apiKey ? 'PRESENT (starts with: ' + apiKey.substring(0, 8) + '...)' : 'MISSING'}`);
-  console.log(`[AUTH] BACKEND_API_KEY env: ${process.env.BACKEND_API_KEY ? 'PRESENT (starts with: ' + process.env.BACKEND_API_KEY.substring(0, 8) + '...)' : 'MISSING'}`);
-
-  if (!apiKey) {
-    console.warn(`[AUTH] No API key provided — returning 401`);
-    return res.status(401).json({ message: 'No API Key provided' });
-  }
-
-  // Check against static env key for extension or DB keys
-  if (apiKey === process.env.BACKEND_API_KEY) {
-    console.log(`[AUTH] API key matches BACKEND_API_KEY — allowed`);
-    return next();
-  }
-
-  console.warn(`[AUTH] API key does NOT match BACKEND_API_KEY — checking database`);
-
   try {
-    const keyRecord = await ApiKey.findOne({ key: apiKey, active: true });
-    if (!keyRecord) {
-      console.warn(`[AUTH] No matching active API key in DB — returning 401`);
+    let token;
+    const authHeader = req.header('Authorization');
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
+    } else if (req.cookies && req.cookies.token) {
+      token = req.cookies.token;
+    }
+
+    if (token) {
+      if (!process.env.JWT_SECRET) {
+        logger.error('[AUTH] JWT_SECRET environment variable is missing');
+        return res.status(500).json({ message: 'Server configuration error' });
+      }
+
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = decoded;
+      return next();
+    }
+
+    const apiKey = req.header('X-API-KEY');
+    if (apiKey) {
+      if (apiKey === process.env.BACKEND_API_KEY) {
+        return next();
+      }
+
+      const keyRecord = await ApiKey.findOne({ key: apiKey, active: true });
+      if (keyRecord) {
+        keyRecord.lastUsedAt = new Date();
+        await keyRecord.save();
+        return next();
+      }
+
       return res.status(401).json({ message: 'Invalid or inactive API Key' });
     }
 
-    console.log(`[AUTH] Found matching API key in DB — allowing`);
-    keyRecord.lastUsedAt = new Date();
-    await keyRecord.save();
-    next();
+    return res.status(401).json({ message: 'Authentication required' });
   } catch (error) {
-    console.error(`[AUTH] Auth middleware error: ${error.message}`);
-    console.error(`[AUTH] Error stack: ${error.stack}`);
-    res.status(500).json({ message: 'Server auth error' });
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      return res.status(401).json({ message: 'Invalid or expired token' });
+    }
+
+    logger.error(`[AUTH] Middleware error: ${error.message}`);
+    return res.status(500).json({ message: 'Server auth error' });
   }
 };
 
